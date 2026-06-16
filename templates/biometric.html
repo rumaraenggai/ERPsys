@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% set active = "biometric" %}
+{% block content %}
+
+<div class="grid-2">
+  <!-- ESSL Sync -->
+  <div class="card">
+    <div class="card-title">ESSL Device Sync</div>
+    <div style="font-size:13px;margin-bottom:12px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;display:inline-block"></span>
+        Device connected
+      </div>
+      <div style="color:#7A7974;font-size:12px">Uses <code>pyzk</code> library over TCP port 4370.</div>
+    </div>
+    <form method="POST" action="/biometric/sync">
+      <div class="form-grid cols-2" style="margin-bottom:10px">
+        <div class="form-field">
+          <label>Device IP</label>
+          <input name="ip" value="192.168.1.100" placeholder="192.168.1.x">
+        </div>
+        <div class="form-field">
+          <label>Port</label>
+          <input name="port" value="4370" type="number">
+        </div>
+      </div>
+      <button class="btn btn-primary" type="submit">🔄 Pull from Device</button>
+    </form>
+  </div>
+
+  <!-- Manual Punch -->
+  <div class="card">
+    <div class="card-title">Manual Punch Entry</div>
+    <form method="POST" action="/biometric/manual">
+      <div class="form-grid cols-2">
+        <div class="form-field span-2">
+          <label>Employee *</label>
+          <select name="employee_id">
+            <option value="">Select…</option>
+            {% for e in employees %}
+            <option value="{{ e.id }}">{{ e.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Date *</label>
+          <input type="date" name="punch_date" value="{{ today }}">
+        </div>
+        <div class="form-field">
+          <label>Punch In *</label>
+          <input type="time" name="punch_in">
+        </div>
+        <div class="form-field span-2">
+          <label>Punch Out (optional)</label>
+          <input type="time" name="punch_out">
+        </div>
+        <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" type="submit">Save Punch</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Today's Log -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+    <span class="card-title" style="margin:0">Today's Attendance — {{ today }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Punch In</th><th>Punch Out</th><th>Hours</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for r in records %}
+    {% set hrs = ((r.punch_out|replace(':','.')|float - r.punch_in|replace(':','.')|float) if r.punch_out else none) %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ r.emp_name[:2] }}</div>{{ r.emp_name }}</div></td>
+      <td><code>{{ r.punch_in }}</code></td>
+      <td><code>{{ r.punch_out or '—' }}</code></td>
+      <td>
+        {% if r.punch_in and r.punch_out %}
+          {% set h_in  = r.punch_in.split(':')  %}
+          {% set h_out = r.punch_out.split(':') %}
+          {% set mins = (h_out[0]|int * 60 + h_out[1]|int) - (h_in[0]|int * 60 + h_in[1]|int) %}
+          <span class="badge {{ 'badge-amber' if mins > 540 else 'badge-green' }}">{{ (mins // 60)|string + 'h ' + (mins % 60)|string + 'm' }}</span>
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="badge {{ 'badge-blue' if r.source=='essl' else 'badge-gray' }}">{{ r.source }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;padding:20px;color:#7A7974">No punches recorded today. Sync device or add manually.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

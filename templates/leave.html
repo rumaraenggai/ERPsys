@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% set active = "leave" %}
+{% block content %}
+
+<!-- Apply Form -->
+<div class="card">
+  <div class="card-title">Apply for Leave</div>
+  <form method="POST" action="/leave/apply">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Employee *</label>
+        <select name="employee_id" required>
+          <option value="">Select…</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Leave Type *</label>
+        <select name="leave_type_id" required>
+          <option value="">Select…</option>
+          {% for lt in leave_types %}
+          <option value="{{ lt.id }}">{{ lt.name }} ({{ lt.days }}d/yr) {% if not lt.paid %}— Unpaid{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>From Date *</label>
+        <input type="date" name="from_date" required min="{{ today }}">
+      </div>
+      <div class="form-field">
+        <label>To Date *</label>
+        <input type="date" name="to_date" required min="{{ today }}">
+      </div>
+      <div class="form-field span-2">
+        <label>Reason</label>
+        <input name="reason" placeholder="Brief reason (optional)">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Submit Application</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Leave Balances -->
+<details class="card">
+  <summary style="cursor:pointer;font-weight:500;font-size:13px;list-style:none">
+    📊 Leave Balances — {{ year }}
+    <a href="/leave?year={{ year-1 }}" class="btn btn-sm" style="margin-left:8px">← {{ year-1 }}</a>
+    <a href="/leave?year={{ year+1 }}" class="btn btn-sm">{{ year+1 }} →</a>
+  </summary>
+  <div style="margin-top:12px;overflow-x:auto">
+  <table>
+    <thead><tr><th>Employee</th><th>Leave Type</th><th>Allocated</th><th>Used</th><th>Remaining</th></tr></thead>
+    <tbody>
+    {% for b in balances %}
+    {% set remaining = b.allocated - b.used %}
+    <tr>
+      <td>{{ b.emp_name }}</td>
+      <td>{{ b.leave_name }}</td>
+      <td>{{ b.allocated|int }}</td>
+      <td>{{ b.used|int }}</td>
+      <td>
+        <span class="badge {{ 'badge-green' if remaining > 5 else 'badge-amber' if remaining > 0 else 'badge-red' }}">
+          {{ remaining|int }} days
+        </span>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;color:#7A7974;padding:16px">No balance data for {{ year }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+
+<!-- Requests List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC;display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Leave Requests</span>
+    <div class="ml-auto">
+      <form method="GET" action="/leave" style="display:flex;gap:6px">
+        <select name="emp" onchange="this.form.submit()">
+          <option value="">All Employees</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}" {{ 'selected' if emp_filter==e.id|string }}>{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="status" onchange="this.form.submit()">
+          <option value="">All Status</option>
+          {% for s in ["pending","approved","rejected","cancelled"] %}
+          <option value="{{ s }}" {{ 'selected' if status_filter==s }}>{{ s|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th>Status</th><th>Applied</th>
+      {% if current_user.role in ('admin','hr') %}<th>Actions</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in requests %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ r.emp_name[:2] }}</div>{{ r.emp_name }}</div></td>
+      <td>
+        {{ r.leave_name }}
+        {% if not r.paid %}<span class="badge badge-amber" style="margin-left:4px">Unpaid</span>{% endif %}
+      </td>
+      <td>{{ r.from_date }}</td>
+      <td>{{ r.to_date }}</td>
+      <td><span class="badge badge-blue">{{ r.days|int }}d</span></td>
+      <td style="color:#7A7974;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.reason }}">{{ r.reason or '—' }}</td>
+      <td>
+        <span class="badge {{ 'badge-amber' if r.status=='pending' else 'badge-green' if r.status=='approved' else 'badge-red' if r.status=='rejected' else 'badge-gray' }}">
+          {{ r.status }}
+        </span>
+        {% if r.remarks %}<div style="font-size:11px;color:#7A7974;margin-top:2px">{{ r.remarks }}</div>{% endif %}
+      </td>
+      <td style="font-size:12px;color:#7A7974">{{ r.applied_on }}</td>
+      {% if current_user.role in ('admin','hr') %}
+      <td>
+        <div class="flex">
+          {% if r.status == 'pending' %}
+          <form method="POST" action="/leave/review/{{ r.id }}" style="display:flex;gap:4px;align-items:center">
+            <input name="remarks" placeholder="Remarks" style="width:90px;font-size:12px;padding:3px 6px">
+            <button name="action" value="approve" class="btn btn-sm btn-primary">✓</button>
+            <button name="action" value="reject"  class="btn btn-sm btn-danger">✕</button>
+          </form>
+          {% elif r.status == 'approved' %}
+          <form method="POST" action="/leave/cancel/{{ r.id }}">
+            <button class="btn btn-sm" type="submit" onclick="return confirm('Cancel this approved leave?')">Cancel</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="9" style="text-align:center;padding:20px;color:#7A7974">No leave requests found.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

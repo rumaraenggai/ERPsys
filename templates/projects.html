@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% set active = "projects" %}
+{% block content %}
+
+<!-- Add Project Form -->
+<details class="card" {{ 'open' if show_form }}>
+  <summary style="cursor:pointer;font-weight:500;font-size:13px;list-style:none">
+    ＋ New Project
+  </summary>
+  <div style="margin-top:14px">
+  <form method="POST" action="/projects/add">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2">
+        <label>Project Name *</label>
+        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Flare System Redesign">
+        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Client *</label>
+        <input name="client" value="{{ form.client if form else '' }}" class="{{ 'err' if errors and errors.client }}" placeholder="e.g. PetroChem Ltd">
+        {% if errors and errors.client %}<div class="field-err">{{ errors.client }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Project Type</label>
+        <select name="type">
+          {% for t in ["","FEED","Detailed Engineering","HAZOP / Safety","Inspection","Commissioning","Consulting"] %}
+          <option value="{{ t }}" {{ 'selected' if form and form.type==t }}>{{ t or 'Select type…' }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Start Date *</label>
+        <input type="date" name="start_date" value="{{ form.start_date if form else '' }}" class="{{ 'err' if errors and errors.start }}">
+        {% if errors and errors.start %}<div class="field-err">{{ errors.start }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>End Date *</label>
+        <input type="date" name="end_date" value="{{ form.end_date if form else '' }}" class="{{ 'err' if errors and errors.end }}">
+        {% if errors and errors.end %}<div class="field-err">{{ errors.end }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Budget (₹) *</label>
+        <input type="number" name="budget" value="{{ form.budget if form else '' }}" class="{{ 'err' if errors and errors.budget }}" placeholder="e.g. 2500000" min="0">
+        {% if errors and errors.budget %}<div class="field-err">{{ errors.budget }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Billing Type</label>
+        <select name="billing_type">
+          {% for b in ["Fixed price","Time & material","Retainer"] %}
+          <option>{{ b }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Project Lead *</label>
+        <select name="lead" class="{{ 'err' if errors and errors.lead }}">
+          <option value="">Select lead…</option>
+          {% for e in employees %}
+          <option value="{{ e.name }}" {{ 'selected' if form and form.lead==e.name }}>{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.lead %}<div class="field-err">{{ errors.lead }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Status</label>
+        <select name="status">
+          {% for s in ["active","planned","on-hold"] %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field span-2">
+        <label>Team Members</label>
+        <select name="members" multiple style="height:90px">
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        <div style="font-size:11px;color:#7A7974;margin-top:3px">Hold Ctrl / Cmd to select multiple</div>
+      </div>
+
+      <!-- Milestones -->
+      <div class="form-field span-2">
+        <div class="section-heading">Milestones (optional)</div>
+        <div id="milestones"></div>
+        <button type="button" class="btn btn-sm" onclick="addMs()">＋ Add milestone</button>
+      </div>
+
+      <div class="form-field span-2" style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="reset" class="btn">Reset</button>
+        <button type="submit" class="btn btn-primary">Create Project</button>
+      </div>
+    </div>
+  </form>
+  </div>
+</details>
+
+<!-- Projects List -->
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/projects" style="display:flex;gap:6px">
+    <select name="status" onchange="this.form.submit()">
+      <option value="" {{ 'selected' if not status }}>All Status</option>
+      {% for s in ["active","on-hold","planned","completed"] %}
+      <option value="{{ s }}" {{ 'selected' if status==s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% for p in projects %}
+<div class="card">
+  <div class="flex" style="margin-bottom:8px">
+    <a href="/projects/detail/{{ p.id }}" style="font-weight:600;font-size:15px">{{ p.name }}</a>
+    <span class="badge {{ 'badge-green' if p.status=='active' else 'badge-amber' if p.status=='on-hold' else 'badge-blue' if p.status=='completed' else 'badge-gray' }}">{{ p.status }}</span>
+    <span style="font-size:11px;color:#7A7974">{{ p.id }}</span>
+    <span class="ml-auto" style="font-size:12px;color:#7A7974">{{ p.start_date }} → {{ p.end_date }}</span>
+  </div>
+  <div style="font-size:12px;color:#7A7974;margin-bottom:10px">{{ p.client }} · Lead: {{ p.lead }} · {{ p.type or '' }}</div>
+  <div class="metric-grid cols-3" style="margin-bottom:8px">
+    <div class="metric"><div class="metric-val" style="font-size:16px">₹{{ "{:,.0f}".format(p.budget) }}</div><div class="metric-lbl">Budget</div></div>
+    <div class="metric"><div class="metric-val" style="font-size:16px">₹{{ "{:,.0f}".format(p.spent) }}</div><div class="metric-lbl">Spent</div></div>
+    <div class="metric"><div class="metric-val" style="font-size:16px;color:{{ '#A32D2D' if p.budget and (p.spent/p.budget)>0.8 else '#1D9E75' }}">{{ "{:.0f}".format(p.spent/p.budget*100) if p.budget else 0 }}%</div><div class="metric-lbl">Burn</div></div>
+  </div>
+  {% if p.budget %}
+  <div class="progress-bar"><div class="progress-fill" style="width:{{ [p.spent/p.budget*100,100]|min }}%;background:{{ '#E24B4A' if (p.spent/p.budget)>0.8 else '#185FA5' }}"></div></div>
+  {% endif %}
+  <div class="flex" style="margin-top:8px">
+    <a href="/projects/detail/{{ p.id }}" class="btn btn-sm">View detail →</a>
+  </div>
+</div>
+{% else %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">No projects yet. Add one above.</div>
+{% endfor %}
+
+<script>
+let mc=0;
+function addMs(){
+  mc++;
+  const row=document.createElement("div");
+  row.style="display:grid;grid-template-columns:1fr 140px 28px;gap:6px;margin-bottom:6px";
+  row.innerHTML=`<input name="ms_name" placeholder="Milestone name"><input type="date" name="ms_date"><button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:#7A7974">×</button>`;
+  document.getElementById("milestones").appendChild(row);
+}
+</script>
+{% endblock %}

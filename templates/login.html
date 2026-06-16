@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MiniERP — Login</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Segoe UI,system-ui,sans-serif;background:#F5F4F0;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#fff;border:1px solid #E5E3DC;border-radius:12px;padding:32px;width:340px}
+.logo{font-size:20px;font-weight:700;margin-bottom:4px}
+.logo span{font-size:12px;font-weight:400;color:#7A7974;display:block;margin-bottom:24px}
+label{font-size:12px;color:#7A7974;display:block;margin-bottom:4px}
+input{width:100%;padding:8px 10px;border:1px solid #D5D3CB;border-radius:6px;font-size:14px;outline:none;margin-bottom:14px}
+input:focus{border-color:#185FA5;box-shadow:0 0 0 2px #E6F1FB}
+.btn{width:100%;padding:9px;background:#185FA5;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer}
+.btn:hover{background:#0C447C}
+.flash{padding:9px 12px;border-radius:6px;font-size:13px;margin-bottom:14px}
+.flash-error{background:#FCEBEB;border:1px solid #F5C6C6;color:#A32D2D}
+.flash-info{background:#E6F1FB;border:1px solid #B5D4F4;color:#185FA5}
+.remember{display:flex;align-items:center;gap:6px;font-size:13px;color:#5A5854;margin-bottom:16px}
+.remember input{width:auto;margin:0}
+.hint{margin-top:16px;font-size:11px;color:#A8A5A0;border-top:1px solid #E5E3DC;padding-top:12px}
+.hint b{color:#5A5854}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">MiniERP <span>Company ERP · Please sign in</span></div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="POST" action="/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" placeholder="e.g. admin" autofocus required>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" placeholder="••••••••" required>
+
+    <label class="remember">
+      <input type="checkbox" name="remember"> Keep me signed in
+    </label>
+
+    <button class="btn" type="submit">Sign In</button>
+  </form>
+
+  <div class="hint">
+    <b>Default accounts:</b><br>
+    admin / admin123 &nbsp;·&nbsp; hr / hr123 &nbsp;·&nbsp; viewer / viewer123<br>
+    <span style="color:#E24B4A">Change these after first login.</span>
+  </div>
+</div>
+</body>
+</html>

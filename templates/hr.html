@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+
+<!-- Add Employee Form -->
+<div class="card">
+  <div class="card-title">Add New Employee</div>
+  <form method="POST" action="/hr/add">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2">
+        <label>Full Name *</label>
+        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Rahul Mehta">
+        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Department *</label>
+        <select name="dept" class="{{ 'err' if errors and errors.dept }}">
+          <option value="">Select…</option>
+          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
+          <option {{ 'selected' if form and form.dept==d }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.dept %}<div class="field-err">{{ errors.dept }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Role / Designation *</label>
+        <input name="role" value="{{ form.role if form else '' }}" class="{{ 'err' if errors and errors.role }}" placeholder="e.g. Process Engineer">
+        {% if errors and errors.role %}<div class="field-err">{{ errors.role }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Joining Date *</label>
+        <input type="date" name="join_date" value="{{ form.join_date if form else '' }}" class="{{ 'err' if errors and errors.join }}">
+        {% if errors and errors.join %}<div class="field-err">{{ errors.join }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Monthly Gross Salary (₹) *</label>
+        <input type="number" name="salary" value="{{ form.salary if form else '' }}" class="{{ 'err' if errors and errors.salary }}" placeholder="e.g. 55000" min="0">
+        {% if errors and errors.salary %}<div class="field-err">{{ errors.salary }}</div>{% endif %}
+      </div>
+      <div class="form-field span-2">
+        <label>PAN Number *</label>
+        <input name="pan" value="{{ form.pan if form else '' }}" class="{{ 'err' if errors and errors.pan }}" placeholder="ABCDE1234F" maxlength="10" style="text-transform:uppercase">
+        {% if errors and errors.pan %}<div class="field-err">{{ errors.pan }}</div>{% endif %}
+      </div>
+      <div class="form-field flex" style="align-items:center;gap:20px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="pf" style="width:auto" checked> PF (12% of basic)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="esi" style="width:auto"> ESI (0.75%, ≤₹21k)
+        </label>
+      </div>
+      <div class="form-field" style="display:flex;align-items:flex-end">
+        <button class="btn btn-primary" type="submit">Add Employee</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Employee List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC;display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Employees ({{ employees|length }})</span>
+    <div class="ml-auto flex">
+      <form method="GET" action="/hr" style="display:flex;gap:6px">
+        <input name="q" value="{{ q }}" placeholder="Search…" style="width:150px">
+        <select name="dept" onchange="this.form.submit()">
+          <option value="">All Depts</option>
+          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
+          <option {{ 'selected' if dept==d }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+        <button class="btn btn-sm" type="submit">Search</button>
+      </form>
+      {% if show_all %}
+      <a href="/hr" class="btn btn-sm">Hide Inactive</a>
+      {% else %}
+      <a href="/hr?show_all=1" class="btn btn-sm" style="color:#7A7974">Show Inactive</a>
+      {% endif %}
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Joining</th><th>Salary</th><th>Benefits</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for e in employees %}
+    <tr>
+      <td>
+        <div class="flex">
+          <div class="avatar">{{ e.name[:2] }}</div>
+          <div><div style="font-weight:500">{{ e.name }}</div><div style="font-size:11px;color:#7A7974">{{ e.pan }}</div></div>
+        </div>
+      </td>
+      <td>{{ e.dept }}</td>
+      <td>{{ e.role }}</td>
+      <td>{{ e.join_date }}</td>
+      <td>₹{{ "{:,.0f}".format(e.salary) }}</td>
+      <td>
+        {% if e.pf %}<span class="badge badge-green">PF</span>{% endif %}
+        {% if e.esi %}<span class="badge badge-blue">ESI</span>{% endif %}
+      </td>
+      <td><span class="badge {{ 'badge-green' if e.status=='active' else 'badge-gray' if e.status=='inactive' else 'badge-amber' }}">{{ e.status }}</span></td>
+      <td>
+        <div class="flex">
+          <a href="/salary?emp_id={{ e.id }}" class="btn btn-sm">Payslip</a>
+          <form method="POST" action="/hr/delete/{{ e.id }}" onsubmit="return confirm('Deactivate {{ e.name }}? Their history will be preserved.')">
+            <button class="btn btn-sm btn-danger" type="submit" {{ 'disabled' if e.status=='inactive' }}>
+              {{ '✕ Deactivate' if e.status=='active' else 'Inactive' }}
+            </button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" style="text-align:center;padding:20px;color:#7A7974">No employees found.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

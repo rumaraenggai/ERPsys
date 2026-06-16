@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% set active = "timesheet" %}
+{% block content %}
+
+<!-- Log Entry -->
+<div class="card">
+  <div class="card-title">Log Hours</div>
+  <form method="POST" action="/timesheet/add">
+    <input type="hidden" name="offset" value="{{ offset }}">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Employee *</label>
+        {% if is_manager %}
+        <select name="employee_id">
+          <option value="">Select…</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="hidden" name="employee_id" value="{{ my_emp_id }}">
+        <input type="text" value="{{ employees[0].name if employees }}" disabled>
+        {% endif %}
+      </div>
+      <div class="form-field">
+        <label>Project *</label>
+        <select name="project_id">
+          <option value="">Select…</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Date *</label>
+        <input type="date" name="work_date" value="{{ week_start }}">
+      </div>
+      <div class="form-field">
+        <label>Hours *</label>
+        <input type="number" name="hours" step="0.5" min="0.5" max="24" placeholder="8">
+      </div>
+      <div class="form-field span-2">
+        <label>Notes</label>
+        <input name="notes" placeholder="What was done?">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Log Hours</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Week Navigation -->
+<div class="flex" style="margin-bottom:12px">
+  <a href="/timesheet?week={{ offset - 1 }}&emp={{ emp_filter }}" class="btn btn-sm">← Prev</a>
+  <strong style="font-size:13px">{{ week_start.strftime("%d %b") }} – {{ week_end.strftime("%d %b %Y") }}</strong>
+  <a href="/timesheet?week={{ offset + 1 }}&emp={{ emp_filter }}" class="btn btn-sm">Next →</a>
+  <div class="ml-auto">
+    {% if is_manager %}
+    <form method="GET" style="display:flex;gap:6px">
+      <input type="hidden" name="week" value="{{ offset }}">
+      <select name="emp" onchange="this.form.submit()">
+        <option value="">All Employees</option>
+        {% for e in employees %}
+        <option value="{{ e.id }}" {{ 'selected' if emp_filter==e.id|string }}>{{ e.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Weekly Grid -->
+<div class="card">
+  <div class="card-title">Hours This Week</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th>
+        {% for d in days %}<th style="text-align:center">{{ d }}</th>{% endfor %}
+        <th style="text-align:center">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in employees %}
+    {% set row = grid.get(e.id, {}) %}
+    {% set total = row.values()|sum %}
+    {% if total > 0 %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ e.name[:2] }}</div>{{ e.name.split()[0] }}</div></td>
+      {% for i in range(7) %}
+      <td style="text-align:center">
+        {% if row.get(i) %}
+          <span style="background:#E6F1FB;color:#185FA5;padding:2px 7px;border-radius:4px;font-size:12px;font-weight:500">{{ row[i]|int if row[i] == row[i]|int else row[i] }}</span>
+        {% endif %}
+      </td>
+      {% endfor %}
+      <td style="text-align:center;font-weight:600;color:{{ '#1D9E75' if total>=40 else '#E24B4A' }}">{{ total|int if total==total|int else total }}h</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Entries log -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC"><span class="card-title" style="margin:0">All Entries This Week</span></div>
+  <table>
+    <thead><tr><th>Employee</th><th>Project</th><th>Date</th><th>Hours</th><th>Notes</th><th></th></tr></thead>
+    <tbody>
+    {% for t in entries %}
+    <tr>
+      <td>{{ t.emp_name }}</td>
+      <td>{{ t.proj_name }}</td>
+      <td>{{ t.work_date }}</td>
+      <td><span class="badge badge-blue">{{ t.hours }}h</span></td>
+      <td style="color:#7A7974">{{ t.notes or '—' }}</td>
+      <td>
+        <form method="POST" action="/timesheet/delete/{{ t.id }}">
+          <button class="btn btn-sm btn-danger" type="submit">✕</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;padding:20px;color:#7A7974">No entries this week.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

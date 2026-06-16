@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% set active = "salary" %}
+{% block content %}
+
+<!-- Selector -->
+<div class="card">
+  <form method="GET" action="/salary" class="flex">
+    <div style="flex:1">
+      <label>Employee</label>
+      <select name="emp_id" onchange="this.form.submit()">
+        <option value="">Select employee…</option>
+        {% for e in employees %}
+        <option value="{{ e.id }}" {{ 'selected' if selected and selected.id==e.id }}>{{ e.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Month</label>
+      <select name="month" onchange="this.form.submit()">
+        {% for i in range(1,13) %}
+        <option value="{{ i }}" {{ 'selected' if month==i }}>{{ months[i-1] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Year</label>
+      <select name="year" onchange="this.form.submit()">
+        {% for y in range(2023, 2027) %}
+        <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if selected %}<input type="hidden" name="emp_id" value="{{ selected.id }}">{% endif %}
+  </form>
+  <div style="margin-top:10px;text-align:right">
+    <a href="/salary/export/excel?year={{ year }}&month={{ month }}"
+       class="btn btn-sm" style="background:#1D6F42;color:#fff;border-color:#1D6F42">
+      ⬇ Export Payroll Register (.xlsx)
+    </a>
+  </div>
+</div>
+
+{% if selected and slip %}
+<div class="grid-2">
+  <!-- Earnings -->
+  <div class="card">
+    <div class="flex" style="margin-bottom:14px">
+      <div class="avatar" style="width:40px;height:40px;font-size:15px">{{ selected.name[:2] }}</div>
+      <div>
+        <div style="font-weight:600">{{ selected.name }}</div>
+        <div style="font-size:12px;color:#7A7974">{{ selected.role }} · {{ selected.dept }}</div>
+        <div style="font-size:11px;color:#7A7974">PAN: {{ selected.pan }} · Days worked: {{ slip.worked_days }}</div>
+      </div>
+    </div>
+    <div class="card-title">Earnings — {{ months[month-1] }} {{ year }}</div>
+    {% for label, val in [("Basic (50%)", slip.basic), ("HRA (20%)", slip.hra), ("Special Allowance", slip.special)] %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span><span>₹{{ "{:,.0f}".format(val) }}</span>
+    </div>
+    {% endfor %}
+    <div style="display:flex;justify-content:space-between;padding:10px;background:#F5F4F0;border-radius:6px;margin-top:8px;font-weight:600">
+      <span>Gross Salary</span><span>₹{{ "{:,.0f}".format(slip.gross) }}</span>
+    </div>
+  </div>
+
+  <!-- Deductions & Net -->
+  <div class="card">
+    <div class="card-title">Deductions</div>
+    {% for label, val, show in [
+        ("PF (12% of basic, cap ₹15k)", slip.pf, selected.pf),
+        ("ESI (0.75%)", slip.esi, selected.esi),
+        ("Professional Tax", slip.pt, True),
+        ("TDS (estimated)", slip.tds, True)
+    ] %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span>
+      <span style="color:{{ '#A32D2D' if show and val > 0 else '#7A7974' }}">
+        {{ ("− ₹" + "{:,.0f}".format(val)) if show and val > 0 else "N/A" }}
+      </span>
+    </div>
+    {% endfor %}
+    <div style="display:flex;justify-content:space-between;padding:10px;background:#FEF0F0;border-radius:6px;margin-top:8px;font-weight:600;color:#A32D2D">
+      <span>Total Deductions</span><span>− ₹{{ "{:,.0f}".format(slip.total_ded) }}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:12px;background:#E6F1FB;border:1px solid #B5D4F4;border-radius:6px;margin-top:8px;font-weight:700;font-size:16px;color:#185FA5">
+      <span>Net Pay</span><span>₹{{ "{:,.0f}".format(slip.net) }}</span>
+    </div>
+    <div style="margin-top:12px;text-align:right">
+      <a href="/salary/pdf?emp_id={{ selected.id }}&year={{ year }}&month={{ month }}"
+         class="btn btn-primary" target="_blank">⬇ Download PDF Payslip</a>
+    </div>
+  </div>
+</div>
+
+<!-- Email Dispatch -->
+<div class="card">
+  <div class="card-title">📧 Email Payslip</div>
+  <div class="grid-2">
+    <!-- Send form -->
+    <form method="POST" action="/salary/email/send">
+      <input type="hidden" name="emp_id" value="{{ selected.id }}">
+      <input type="hidden" name="year"   value="{{ year }}">
+      <input type="hidden" name="month"  value="{{ month }}">
+      <div class="form-field" style="margin-bottom:10px">
+        <label>Recipient Email *</label>
+        <input type="email" name="to_email" placeholder="employee@example.com" required>
+      </div>
+      <button class="btn btn-primary" type="submit">✉ Send Payslip PDF</button>
+    </form>
+    <!-- SMTP config (admin/hr only) -->
+    {% if current_user.role in ('admin','hr') %}
+    <form method="POST" action="/salary/email/config">
+      <input type="hidden" name="emp_id" value="{{ selected.id }}">
+      <input type="hidden" name="year"   value="{{ year }}">
+      <input type="hidden" name="month"  value="{{ month }}">
+      <div class="form-field" style="margin-bottom:8px">
+        <label>Sender Email (Outlook/O365)</label>
+        <input type="email" name="sender" placeholder="hr@yourcompany.com">
+      </div>
+      <div class="form-field" style="margin-bottom:10px">
+        <label>App Password</label>
+        <input type="password" name="password" placeholder="••••••••••••">
+      </div>
+      <button class="btn" type="submit">💾 Save SMTP Settings</button>
+      <div style="font-size:11px;color:#7A7974;margin-top:6px">
+        Use an <a href="https://support.microsoft.com/en-us/account-billing/using-app-passwords-with-apps-that-don-t-support-two-step-verification-5896ed9b-4263-e681-128a-a6f2979a7944" target="_blank" style="color:#185FA5">App Password</a> if MFA is enabled on the account.
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% elif selected %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">No salary data for selected period.</div>
+{% else %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">Select an employee above to view salary slip.</div>
+{% endif %}
+{% endblock %}

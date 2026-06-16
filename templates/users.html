@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% set active = "users" %}
+{% block content %}
+
+<!-- Add User -->
+<div class="card">
+  <div class="card-title">Add User</div>
+  <form method="POST" action="/users/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Username *</label>
+        <input name="username" placeholder="e.g. sneha.patil" required>
+      </div>
+      <div class="form-field">
+        <label>Full Name *</label>
+        <input name="full_name" placeholder="e.g. Sneha Patil" required>
+      </div>
+      <div class="form-field">
+        <label>Password *</label>
+        <input type="password" name="password" placeholder="Min 4 characters" required>
+      </div>
+      <div class="form-field">
+        <label>Role *</label>
+        <select name="role">
+          <option value="viewer">Viewer — read only</option>
+          <option value="hr">HR — add/edit employees &amp; timesheets</option>
+          <option value="admin">Admin — full access + user management</option>
+        </select>
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Create User</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- User List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+    <span class="card-title" style="margin:0">All Users</span>
+  </div>
+  <table>
+    <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td><code>{{ u.username }}</code></td>
+      <td>{{ u.full_name }}</td>
+      <td>
+        {% if current_user.role == 'admin' and u.id != current_user.id %}
+        <form method="POST" action="/users/role/{{ u.id }}" style="display:flex;gap:4px;align-items:center">
+          <select name="role" style="padding:3px 6px;font-size:12px">
+            {% for r in ["admin","hr","viewer"] %}
+            <option value="{{ r }}" {{ 'selected' if u.role==r }}>{{ r }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-sm btn-primary" type="submit">Save</button>
+        </form>
+        {% else %}
+        <span class="badge {{ 'badge-red' if u.role=='admin' else 'badge-blue' if u.role=='hr' else 'badge-gray' }}">
+          {{ u.role }}
+        </span>
+        {% endif %}
+      </td>
+      <td>
+        <span class="badge {{ 'badge-green' if u.active else 'badge-amber' }}">
+          {{ 'Active' if u.active else 'Disabled' }}
+        </span>
+      </td>
+      <td>
+        <div class="flex">
+          <!-- Toggle active -->
+          <form method="POST" action="/users/toggle/{{ u.id }}" style="display:inline">
+            <button class="btn btn-sm" type="submit">
+              {{ 'Disable' if u.active else 'Enable' }}
+            </button>
+          </form>
+          <!-- Reset password -->
+          <form method="POST" action="/users/reset/{{ u.id }}" style="display:flex;gap:4px">
+            <input name="new_password" type="password" placeholder="New password" style="width:120px">
+            <button class="btn btn-sm" type="submit">Reset PW</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-title">Module Permissions (per role)</div>
+  <form method="POST" action="/users/permissions">
+    <table style="margin-bottom:12px">
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th style="text-align:center">HR</th>
+          <th style="text-align:center">User</th>
+          <th style="text-align:center">Admin</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mod in modules %}
+        <tr>
+          <td style="text-transform:capitalize">{{ mod }}</td>
+          {% for role in roles %}
+          <td style="text-align:center">
+            <input type="checkbox" name="{{ role }}_{{ mod }}"
+              {{ 'checked' if perm_map[role][mod] }}>
+          </td>
+          {% endfor %}
+          <td style="text-align:center">
+            <span style="color:#7A7974;font-size:12px">Always ✓</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button class="btn btn-primary btn-sm" type="submit">Save Permissions</button>
+  </form>
+</div>
+{% endblock %}

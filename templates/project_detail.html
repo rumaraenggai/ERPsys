@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% set active = "projects" %}
+{% block content %}
+<div class="flex" style="margin-bottom:14px">
+  <a href="/projects" class="btn btn-sm">← Back</a>
+  <h2 style="font-size:16px;font-weight:600">{{ project.name }}</h2>
+  <span class="badge {{ 'badge-green' if project.status=='active' else 'badge-amber' }}">{{ project.status }}</span>
+  <span style="font-size:12px;color:#7A7974" class="ml-auto">{{ project.id }}</span>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Details</div>
+    {% for label, val in [
+      ("Client", project.client), ("Type", project.type or "—"),
+      ("Lead", project.lead), ("Billing", project.billing_type),
+      ("Start", project.start_date), ("End", project.end_date)
+    ] %}
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span><span>{{ val }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <div class="card-title">Budget</div>
+    <div style="font-size:24px;font-weight:700;margin-bottom:4px">₹{{ "{:,.0f}".format(project.budget) }}</div>
+    <div style="font-size:13px;color:#7A7974;margin-bottom:10px">₹{{ "{:,.0f}".format(project.spent) }} spent</div>
+    {% if project.budget %}
+    {% set pct = (project.spent / project.budget * 100)|round %}
+    <div class="progress-bar" style="height:10px"><div class="progress-fill" style="width:{{ [pct,100]|min }}%;background:{{ '#E24B4A' if pct>80 else '#185FA5' }}"></div></div>
+    <div style="font-size:12px;color:#7A7974;margin-top:4px">{{ pct }}% consumed</div>
+    {% endif %}
+
+    <div class="card-title" style="margin-top:14px">Team</div>
+    <div class="flex" style="flex-wrap:wrap">
+    {% for m in members %}
+      <div class="flex" style="background:#F5F4F0;padding:4px 10px;border-radius:20px;font-size:12px">
+        <div class="avatar" style="width:22px;height:22px;font-size:10px">{{ m.name[:2] }}</div>{{ m.name }}
+      </div>
+    {% else %}<span style="color:#7A7974;font-size:13px">No members assigned.</span>{% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Milestones -->
+<div class="card">
+  <div class="card-title">Milestones</div>
+  {% if milestones %}
+  <table>
+    <thead><tr><th>Milestone</th><th>Due Date</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for m in milestones %}
+    <tr>
+      <td>{{ m.name }}</td>
+      <td>{{ m.due_date or '—' }}</td>
+      <td><span class="badge {{ 'badge-green' if m.done else 'badge-amber' }}">{{ 'Done' if m.done else 'Pending' }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="color:#7A7974;font-size:13px">No milestones defined.</div>
+  {% endif %}
+</div>
+
+<!-- Timesheets -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC"><span class="card-title" style="margin:0">Logged Hours</span></div>
+  <table>
+    <thead><tr><th>Employee</th><th>Date</th><th>Hours</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for t in timesheets %}
+    <tr>
+      <td>{{ t.emp_name }}</td>
+      <td>{{ t.work_date }}</td>
+      <td><span class="badge badge-blue">{{ t.hours }}h</span></td>
+      <td style="color:#7A7974">{{ t.notes or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="text-align:center;padding:20px;color:#7A7974">No hours logged yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

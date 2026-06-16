@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  erp:
+    build: .
+    container_name: minierp
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data   # erp.db lives here — persists across restarts
+    environment:
+      - ERP_DB_PATH=/app/data/erp.db
+    restart: unless-stopped
