@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active = "holidays" %}
+{% block content %}
+
+{% if current_user.is_hr %}
+<div class="card">
+  <div class="card-title">Add Holiday</div>
+  <form method="POST" action="/holidays/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Holiday Name *</label>
+        <input name="name" placeholder="e.g. Diwali">
+      </div>
+      <div class="form-field">
+        <label>Date *</label>
+        <input type="date" name="date">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Add Holiday</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/holidays" style="display:flex;gap:6px">
+    <select name="year" onchange="this.form.submit()">
+      {% for y in range(2023,2027) %}
+      <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>Holiday</th><th>Date</th><th>Day</th>{% if current_user.is_hr %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for h in holidays %}
+    <tr>
+      <td style="font-weight:500">{{ h.name }}</td>
+      <td>{{ h.date }}</td>
+      <td style="color:var(--text2)">{{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][h.date | datetimeformat('%w') | int - 1] if h.date else '—' }}</td>
+      {% if current_user.is_hr %}
+      <td>
+        <form method="POST" action="/holidays/delete/{{ h.id }}">
+          <button class="btn btn-sm btn-danger" type="submit">✕</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text2)">No holidays added for {{ year }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

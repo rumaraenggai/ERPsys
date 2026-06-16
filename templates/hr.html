@@ -103,6 +103,7 @@
       <td>
         <div class="flex">
           <a href="/salary?emp_id={{ e.id }}" class="btn btn-sm">Payslip</a>
+          <a href="/hr/edit/{{ e.id }}" class="btn btn-sm">Edit</a>
           <form method="POST" action="/hr/delete/{{ e.id }}" onsubmit="return confirm('Deactivate {{ e.name }}? Their history will be preserved.')">
             <button class="btn btn-sm btn-danger" type="submit" {{ 'disabled' if e.status=='inactive' }}>
               {{ '✕ Deactivate' if e.status=='active' else 'Inactive' }}

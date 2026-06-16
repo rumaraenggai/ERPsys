@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% set active = "reports" %}
+{% block content %}
+
+<!-- Selector -->
+<div class="card">
+  <div class="flex" style="gap:16px;flex-wrap:wrap">
+    <a href="/reports/attendance?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='attendance' }}">📅 Attendance</a>
+    {% if current_user.is_hr %}
+    <a href="/reports/payroll?year={{ year }}&month={{ month }}"    class="btn {{ 'btn-primary' if report=='payroll' }}">💰 Payroll Summary</a>
+    <a href="/reports/compliance?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='compliance' }}">📋 PF/ESI Register</a>
+    {% endif %}
+    <a href="/reports/timesheet-summary?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='timesheet_summary' }}">⏱ Timesheet Summary</a>
+    <div class="ml-auto">
+      <form method="GET" action="{{ request.path }}" style="display:flex;gap:6px">
+        <select name="month" onchange="this.form.submit()">
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if month==i }}>{{ months[i-1] }}</option>
+          {% endfor %}
+        </select>
+        <select name="year" onchange="this.form.submit()">
+          {% for y in range(2023,2027) %}
+          <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Attendance Report -->
+{% if report == 'attendance' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span class="card-title" style="margin:0">Attendance — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Days Present</th><th>Late Arrivals</th><th>Total Hours</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td><span class="badge {{ 'badge-green' if r.days_present >= 20 else 'badge-amber' }}">{{ r.days_present or 0 }}</span></td>
+      <td>{{ r.late_count or 0 }}</td>
+      <td>{{ r.total_hours or 0 }}h</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Payroll Summary -->
+{% elif report == 'payroll' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span class="card-title" style="margin:0">Payroll — {{ month_name }} {{ year }}</span>
+    <a href="/reports/export/payroll-excel?year={{ year }}&month={{ month }}" class="btn btn-sm" style="background:#1D6F42;color:#fff;border-color:#1D6F42">⬇ Excel</a>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Gross</th><th>PF</th><th>ESI</th><th>TDS</th><th>Net Pay</th></tr></thead>
+    <tbody>
+    {% for emp, slip in rows %}
+    <tr>
+      <td style="font-weight:500">{{ emp.name }}</td>
+      <td>{{ emp.dept }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.gross) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.pf) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.esi) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.tds) }}</td>
+      <td style="font-weight:500;color:#185FA5">₹{{ "{:,.0f}".format(slip.net) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr style="font-weight:600;background:var(--bg3)">
+        <td colspan="2">Totals</td>
+        <td>₹{{ "{:,.0f}".format(total_gross) }}</td>
+        <td colspan="3"></td>
+        <td style="color:#185FA5">₹{{ "{:,.0f}".format(total_net) }}</td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<!-- Compliance / PF ESI -->
+{% elif report == 'compliance' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <span class="card-title" style="margin:0">PF & ESI Statutory Register — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Gross</th><th>Basic</th><th>PF (Emp)</th><th>PF (Er)</th><th>ESI (Emp)</th><th>ESI (Er)</th><th>PT</th><th>TDS</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td>₹{{ "{:,.0f}".format(r.gross) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.basic) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pf_emp) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pf_er) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.esi_emp) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.esi_er) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pt) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.tds) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Timesheet Summary -->
+{% elif report == 'timesheet_summary' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <span class="card-title" style="margin:0">Timesheet Summary — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Project</th><th>Hours</th><th>Entries</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td>{{ r.proj_name }}</td>
+      <td><span class="badge badge-blue">{{ r.total_hours }}h</span></td>
+      <td>{{ r.entries }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text2)">No timesheet entries for this period.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<div class="card" style="text-align:center;padding:40px;color:var(--text2)">
+  Select a report type above.
+</div>
+{% endif %}
+{% endblock %}

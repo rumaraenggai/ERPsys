@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set active = "salary" %}
+{% block content %}
+<div class="card">
+  <div class="card-title">Run Payroll (All Employees)</div>
+  <form method="POST" action="/salary/run-payroll" style="display:flex;gap:8px;align-items:flex-end">
+    <div class="form-field" style="margin:0">
+      <label>Month</label>
+      <select name="month">{% for i in range(1,13) %}<option value="{{ i }}">{{ ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i-1] }}</option>{% endfor %}</select>
+    </div>
+    <div class="form-field" style="margin:0">
+      <label>Year</label>
+      <select name="year">{% for y in range(2023,2027) %}<option value="{{ y }}">{{ y }}</option>{% endfor %}</select>
+    </div>
+    <button class="btn btn-primary" type="submit" onclick="return confirm('Run payroll for all active employees?')">▶ Run Payroll</button>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Payslip History</span>
+    <div class="ml-auto">
+      <form method="GET" action="/salary/history" style="display:flex;gap:6px">
+        <select name="emp_id" onchange="this.form.submit()">
+          <option value="">All Employees</option>
+          {% for e in employees %}<option value="{{ e.id }}" {{ 'selected' if emp_id==e.id|string }}>{{ e.name }}</option>{% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Month</th><th>Year</th><th>Gross</th><th>Net Pay</th><th>Generated On</th><th>By</th><th></th></tr></thead>
+    <tbody>
+    {% set MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] %}
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.emp_name }}</td>
+      <td>{{ MONTHS[r.month-1] }}</td>
+      <td>{{ r.year }}</td>
+      <td>₹{{ "{:,.0f}".format(r.gross) }}</td>
+      <td style="color:#185FA5;font-weight:500">₹{{ "{:,.0f}".format(r.net) }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ r.generated_on }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ r.generated_by }}</td>
+      <td><a href="/salary/pdf?emp_id={{ r.employee_id }}&year={{ r.year }}&month={{ r.month }}" class="btn btn-sm" target="_blank">⬇ PDF</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text2)">No payroll runs yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

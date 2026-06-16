@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% set active = "tasks" %}
+{% block content %}
+
+{% if is_manager %}
+<div class="card">
+  <div class="card-title">Add Task</div>
+  <form method="POST" action="/tasks/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Project *</label>
+        <select name="project_id" required>
+          <option value="">Select…</option>
+          {% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Task Title *</label>
+        <input name="title" placeholder="e.g. Prepare HAZOP report" required>
+      </div>
+      <div class="form-field">
+        <label>Assign To</label>
+        <select name="assigned_to">
+          <option value="">Unassigned</option>
+          {% for e in employees %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Due Date</label>
+        <input type="date" name="due_date">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Add Task</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<!-- Filter -->
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/tasks" style="display:flex;gap:6px">
+    <select name="project" onchange="this.form.submit()">
+      <option value="">All Projects</option>
+      {% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if proj_filter==p.id }}>{{ p.name }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>Task</th><th>Project</th><th>Assigned To</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for t in tasks %}
+    <tr>
+      <td style="font-weight:500">{{ t.title }}</td>
+      <td style="color:var(--text2)">{{ t.proj_name }}</td>
+      <td>{{ t.assignee_name or '—' }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ t.due_date or '—' }}</td>
+      <td>
+        <span class="badge {{ 'badge-green' if t.status=='done' else 'badge-blue' if t.status=='in-progress' else 'badge-amber' }}">
+          {{ t.status }}
+        </span>
+      </td>
+      <td>
+        <div class="flex">
+          <form method="POST" action="/tasks/status/{{ t.id }}" style="display:flex;gap:4px">
+            <select name="status" style="font-size:12px;padding:3px 6px">
+              {% for s in ["open","in-progress","done"] %}
+              <option {{ 'selected' if t.status==s }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-primary" type="submit">✓</button>
+          </form>
+          {% if is_manager %}
+          <form method="POST" action="/tasks/delete/{{ t.id }}">
+            <button class="btn btn-sm btn-danger" type="submit">✕</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text2)">
+      {% if not is_manager %}No tasks assigned to you yet.{% else %}No tasks found.{% endif %}
+    </td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -167,3 +167,46 @@ def send_email():
         flash(f"Email failed: {e}", "error")
 
     return redirect(url_for("salary.index", emp_id=emp_id, year=year, month=month))
+
+@salary_bp.route("/run-payroll", methods=["POST"])
+@login_required
+def run_payroll():
+    from flask_login import current_user as cu
+    if cu.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("salary.index"))
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    year  = int(request.form.get("year",  date.today().year))
+    month = int(request.form.get("month", date.today().month))
+    conn  = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    count = 0
+    for emp in employees:
+        slip = calc_salary(emp, year, month)
+        conn.execute("""
+            INSERT INTO payslip_history(employee_id,year,month,gross,net,generated_by)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(employee_id,year,month) DO UPDATE SET
+              gross=excluded.gross, net=excluded.net,
+              generated_on=date('now'), generated_by=excluded.generated_by
+        """, (emp["id"], year, month, slip["gross"], slip["net"], cu.full_name))
+        count += 1
+    conn.commit(); conn.close()
+    flash(f"Payroll run complete — {count} payslips recorded for {MONTHS[month-1]} {year}.", "success")
+    return redirect(url_for("salary.index"))
+
+@salary_bp.route("/history")
+@login_required
+def history():
+    conn = get_conn()
+    emp_id = request.args.get("emp_id")
+    rows = conn.execute("""
+        SELECT ph.*, e.name as emp_name FROM payslip_history ph
+        JOIN employees e ON e.id=ph.employee_id
+        WHERE 1=1 """ + (" AND ph.employee_id=?" if emp_id else "") + """
+        ORDER BY ph.year DESC, ph.month DESC, e.name
+    """, (emp_id,) if emp_id else ()).fetchall()
+    employees = conn.execute("SELECT id,name FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    return render_template("payslip_history.html", rows=rows,
+                           employees=employees, emp_id=emp_id)

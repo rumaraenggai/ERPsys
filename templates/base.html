@@ -101,6 +101,7 @@ label{font-size:12px;color:#7A7974;display:block;margin-bottom:4px}
 <div class="sidebar">
   <div class="logo">MiniERP <span>v1.0 · 30 Users</span></div>
   <nav class="nav">
+    <a href="/dashboard" class="{{ 'active' if active=='dashboard' }}">🏠 Dashboard</a>
     <div class="nav-section">People</div>
     <a href="/hr"        class="{{ 'active' if active=='hr' }}">👤 HR</a>
     <a href="/biometric" class="{{ 'active' if active=='biometric' }}">🖐 Biometric</a>
@@ -114,20 +115,32 @@ label{font-size:12px;color:#7A7974;display:block;margin-bottom:4px}
     {% if current_user.can('timesheet') %}
     <a href="/timesheet" class="{{ 'active' if active=='timesheet' }}">⏱ Timesheets</a>
     {% endif %}
+    {% if current_user.can('tasks') or current_user.is_hr %}
+    <a href="/tasks" class="{{ 'active' if active=='tasks' }}">✅ Tasks</a>
+    {% endif %}
     <div class="nav-section">Finance</div>
     <a href="/salary"    class="{{ 'active' if active=='salary' }}">💰 Salary</a>
+    <a href="/reports"   class="{{ 'active' if active=='reports' }}">📊 Reports</a>
+    {% if current_user.is_hr %}
+    <a href="/holidays"  class="{{ 'active' if active=='holidays' }}">📅 Holidays</a>
+    <a href="/salary/history" class="{{ 'active' if active=='payslip_history' }}">🧾 Payslip History</a>
+    {% endif %}
     {% if current_user.is_authenticated and current_user.is_admin %}
     <div class="nav-section">Admin</div>
     <a href="/users"     class="{{ 'active' if active=='users' }}">🔐 Users</a>
     {% endif %}
   </nav>
   <div class="sidebar-footer">
-    <span class="sync-dot"></span>ESSL Connected<br>
-    <span style="font-size:10px">192.168.1.100:4370</span>
+    <!-- ESSL device status — updated live by pollEsslStatus() -->
+    <div id="essl-status" style="line-height:1.5">
+      <span id="essl-dot" class="sync-dot" style="background:#A8A5A0"></span>
+      <span id="essl-label" style="font-size:11px;color:var(--text2)">Checking…</span><br>
+      <span id="essl-addr" style="font-size:10px;color:var(--text3)"></span>
+    </div>
     {% if current_user.is_authenticated %}
-    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #E5E3DC">
-      <div style="font-size:12px;color:#1A1916;font-weight:500">{{ current_user.full_name }}</div>
-      <div style="font-size:11px;color:#7A7974;margin-bottom:6px">
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--text);font-weight:500">{{ current_user.full_name }}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">
         <span style="background:#E6F1FB;color:#185FA5;padding:1px 6px;border-radius:10px;font-size:10px">{{ current_user.role }}</span>
       </div>
       <a href="/logout" style="font-size:11px;color:#A32D2D">Sign out →</a>
@@ -171,6 +184,34 @@ function toggleDark(){
 (function(){
   const d = localStorage.getItem("erp_dark");
   if(d === "1"){ document.body.classList.add("dark"); document.getElementById("theme-toggle").textContent="☀️"; }
+})();
+
+// ── ESSL live status ─────────────────────────────────────────────────────────
+(function(){
+  const dot   = document.getElementById("essl-dot");
+  const label = document.getElementById("essl-label");
+  const addr  = document.getElementById("essl-addr");
+
+  function pollEsslStatus(){
+    fetch("/biometric/status")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const ok = data.connected;
+        dot.style.background  = ok ? "#1D9E75" : "#E24B4A";
+        label.textContent     = ok ? "ESSL Connected" : "ESSL Offline";
+        label.style.color     = ok ? "var(--text2)" : "#A32D2D";
+        addr.textContent      = `${data.ip}:${data.port}`;
+      })
+      .catch(() => {
+        dot.style.background  = "#A8A5A0";
+        label.textContent     = "Status unknown";
+        label.style.color     = "var(--text3)";
+        addr.textContent      = "";
+      });
+  }
+
+  pollEsslStatus();                   // immediate on page load
+  setInterval(pollEsslStatus, 30000); // then every 30 s
 })();
 </script>
 </body>

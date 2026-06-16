@@ -63,9 +63,40 @@ def init_db():
     );
 
     CREATE TABLE IF NOT EXISTS project_members (
-        project_id TEXT,
+        project_id  TEXT,
         employee_id INTEGER,
-        FOREIGN KEY(project_id) REFERENCES projects(id),
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        assigned_to INTEGER,
+        due_date    TEXT,
+        status      TEXT DEFAULT 'open',
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(assigned_to) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS holidays (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        name    TEXT NOT NULL,
+        date    TEXT UNIQUE NOT NULL,
+        year    INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS payslip_history (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        year        INTEGER,
+        month       INTEGER,
+        gross       REAL,
+        net         REAL,
+        generated_on TEXT DEFAULT (date('now')),
+        generated_by TEXT,
+        UNIQUE(employee_id, year, month),
         FOREIGN KEY(employee_id) REFERENCES employees(id)
     );
 
@@ -81,11 +112,14 @@ def init_db():
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER,
         project_id  TEXT,
+        task_id     INTEGER,
         work_date   TEXT,
         hours       REAL,
         notes       TEXT,
+        status      TEXT DEFAULT 'draft',
         FOREIGN KEY(employee_id) REFERENCES employees(id),
-        FOREIGN KEY(project_id)  REFERENCES projects(id)
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(task_id)     REFERENCES tasks(id)
     );
 
     CREATE TABLE IF NOT EXISTS attendance (
@@ -141,6 +175,11 @@ def init_db():
         host     TEXT DEFAULT 'smtp.office365.com',
         port     INTEGER DEFAULT 587
     );
+
+    CREATE TABLE IF NOT EXISTS config (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
     """)
     conn.commit()
 
@@ -180,12 +219,13 @@ def init_db():
         # modules: timesheet, projects, leave
         # admin and hr get everything; user gets timesheet+leave only by default
         perms = []
-        for mod in ["timesheet", "projects", "leave"]:
+        for mod in ["timesheet", "projects", "leave", "tasks"]:
             perms.append(("admin", mod, 1))
             perms.append(("hr",    mod, 1))
         perms.append(("user", "timesheet", 1))
         perms.append(("user", "projects",  0))
         perms.append(("user", "leave",     1))
+        perms.append(("user", "tasks",     1))
         c.executemany(
             "INSERT OR IGNORE INTO role_permissions(role,module,allowed) VALUES(?,?,?)", perms
         )
@@ -212,6 +252,11 @@ def init_db():
                     INSERT OR IGNORE INTO leave_balances(employee_id,leave_type_id,year,allocated,used)
                     VALUES(?,?,?,?,0)
                 """, (emp["id"], lt["id"], year, lt["days"]))
+        conn.commit()
+
+    # Seed default ESSL device address if not already set
+    if c.execute("SELECT COUNT(*) FROM config WHERE key='essl_device'").fetchone()[0] == 0:
+        c.execute("INSERT INTO config(key, value) VALUES('essl_device', '192.168.1.7:4320')")
         conn.commit()
 
     conn.close()

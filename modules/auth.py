@@ -93,7 +93,7 @@ def users():
     users = conn.execute("SELECT id,username,full_name,role,active,employee_id FROM users").fetchall()
     perms = conn.execute("SELECT * FROM role_permissions ORDER BY role,module").fetchall()
     conn.close()
-    modules = ["timesheet", "projects", "leave"]
+    modules = ["timesheet", "projects", "leave", "tasks"]
     roles   = ["hr", "user"]
     # Build dict: {role: {module: allowed}}
     perm_map = {r: {m: 0 for m in modules} for r in roles}
@@ -167,7 +167,7 @@ def reset_password(uid):
 @auth_bp.route("/users/permissions", methods=["POST"])
 @roles_required("admin")
 def save_permissions():
-    modules = ["timesheet", "projects", "leave"]
+    modules = ["timesheet", "projects", "leave", "tasks"]
     roles   = ["hr", "user"]
     conn    = get_conn()
     for role in roles:

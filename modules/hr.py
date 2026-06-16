@@ -100,3 +100,25 @@ def delete(emp_id):
     conn.close()
     flash("Employee marked inactive.", "info")
     return redirect(url_for("hr.index"))
+
+@hr_bp.route("/edit/<int:emp_id>", methods=["GET","POST"])
+@roles_required("admin","hr")
+def edit(emp_id):
+    conn = get_conn()
+    emp  = conn.execute("SELECT * FROM employees WHERE id=?", (emp_id,)).fetchone()
+    if not emp:
+        flash("Employee not found.", "error")
+        return redirect(url_for("hr.index"))
+    if request.method == "POST":
+        f = request.form
+        conn.execute("""
+            UPDATE employees SET name=?,dept=?,role=?,join_date=?,salary=?,pf=?,esi=?,status=?
+            WHERE id=?
+        """, (f["name"],f["dept"],f["role"],f["join_date"],float(f["salary"]),
+              1 if f.get("pf") else 0, 1 if f.get("esi") else 0,
+              f.get("status","active"), emp_id))
+        conn.commit(); conn.close()
+        flash("Employee updated.", "success")
+        return redirect(url_for("hr.index"))
+    conn.close()
+    return render_template("hr_edit.html", emp=emp)

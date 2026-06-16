@@ -23,13 +23,23 @@ def index():
     # Non-managers only see themselves
     if is_manager:
         employees = conn.execute("SELECT id, name FROM employees WHERE status='active'").fetchall()
+        projects  = conn.execute("SELECT id, name FROM projects WHERE status='active'").fetchall()
+        tasks     = []
     else:
         employees = conn.execute(
             "SELECT id, name FROM employees WHERE id=? AND status='active'",
             (current_user.employee_id,)
         ).fetchall()
-
-    projects  = conn.execute("SELECT id, name FROM projects WHERE status='active'").fetchall()
+        # Only show projects where employee has assigned tasks
+        projects = conn.execute("""
+            SELECT DISTINCT p.id, p.name FROM projects p
+            JOIN tasks t ON t.project_id=p.id
+            WHERE t.assigned_to=? AND p.status='active'
+        """, (current_user.employee_id,)).fetchall()
+        tasks = conn.execute("""
+            SELECT id, title, project_id FROM tasks
+            WHERE assigned_to=? AND status != 'done'
+        """, (current_user.employee_id,)).fetchall()
 
     sql = """
         SELECT t.*, e.name as emp_name, p.name as proj_name
@@ -61,7 +71,7 @@ def index():
 
     days = [(start + timedelta(days=i)).strftime("%a %d") for i in range(7)]
     return render_template("timesheet.html",
-        employees=employees, projects=projects,
+        employees=employees, projects=projects, tasks=tasks,
         entries=entries, grid=grid, days=days,
         week_start=start, week_end=end,
         offset=offset, emp_filter=emp_filter,
@@ -101,4 +111,27 @@ def delete(tid):
     conn.commit()
     conn.close()
     flash("Entry removed.", "info")
+    return redirect(url_for("timesheet.index"))
+
+@timesheet_bp.route("/submit/<int:tid>", methods=["POST"])
+@login_required
+def submit(tid):
+    conn = get_conn()
+    conn.execute("UPDATE timesheets SET status='submitted' WHERE id=?", (tid,))
+    conn.commit(); conn.close()
+    flash("Timesheet submitted for approval.", "success")
+    return redirect(url_for("timesheet.index"))
+
+@timesheet_bp.route("/approve/<int:tid>", methods=["POST"])
+@login_required
+def approve(tid):
+    if current_user.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("timesheet.index"))
+    action = request.form.get("action","approve")
+    status = "approved" if action=="approve" else "rejected"
+    conn = get_conn()
+    conn.execute("UPDATE timesheets SET status=? WHERE id=?", (status, tid))
+    conn.commit(); conn.close()
+    flash(f"Timesheet {status}.", "success")
     return redirect(url_for("timesheet.index"))

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block content %}
+
+<div class="metric-grid cols-4" style="margin-bottom:16px">
+  <div class="metric"><div class="metric-val">{{ total_emp }}</div><div class="metric-lbl">Active Employees</div></div>
+  <div class="metric"><div class="metric-val" style="color:#1D9E75">{{ present }}</div><div class="metric-lbl">Present Today</div></div>
+  <div class="metric"><div class="metric-val" style="color:#185FA5">{{ active_proj }}</div><div class="metric-lbl">Active Projects</div></div>
+  <div class="metric"><div class="metric-val">₹{{ "{:,.0f}".format(payroll) }}</div><div class="metric-lbl">Monthly Payroll</div></div>
+  <div class="metric"><div class="metric-val" style="color:#EF9F27">{{ open_leaves }}</div><div class="metric-lbl">Pending Leaves</div></div>
+  <div class="metric"><div class="metric-val" style="color:#A32D2D">{{ open_tasks }}</div><div class="metric-lbl">Open Tasks</div></div>
+</div>
+
+<div class="grid-2">
+  {% if my_tasks %}
+  <div class="card">
+    <div class="card-title">My Open Tasks</div>
+    {% for t in my_tasks %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <div>
+        <div style="font-weight:500">{{ t.title }}</div>
+        <div style="font-size:11px;color:var(--text2)">{{ t.proj_name }}</div>
+      </div>
+      <div style="text-align:right">
+        <span class="badge {{ 'badge-blue' if t.status=='in-progress' else 'badge-amber' }}">{{ t.status }}</span>
+        {% if t.due_date %}<div style="font-size:11px;color:var(--text2);margin-top:2px">Due {{ t.due_date }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    <a href="/tasks" class="btn btn-sm" style="margin-top:10px">View all →</a>
+  </div>
+  {% endif %}
+
+  {% if current_user.is_hr and recent_leaves %}
+  <div class="card">
+    <div class="card-title">Pending Leave Requests</div>
+    {% for r in recent_leaves %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <div>
+        <div style="font-weight:500">{{ r.emp_name }}</div>
+        <div style="font-size:11px;color:var(--text2)">{{ r.leave_name }} · {{ r.days|int }}d · {{ r.from_date }}</div>
+      </div>
+      <a href="/leave" class="btn btn-sm">Review →</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if projects %}
+  <div class="card">
+    <div class="card-title">Project Budget Burn</div>
+    {% for p in projects %}
+    {% set pct = [p.spent/p.budget*100, 100]|min|round|int %}
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">
+        <span style="font-weight:500">{{ p.name }}</span>
+        <span style="color:{{ '#A32D2D' if pct>80 else 'var(--text2)' }}">{{ pct }}%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:{{ pct }}%;background:{{ '#E24B4A' if pct>80 else '#185FA5' }}"></div></div>
+    </div>
+    {% endfor %}
+    <a href="/projects" class="btn btn-sm">All projects →</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

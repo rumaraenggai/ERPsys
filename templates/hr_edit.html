@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+<div class="card" style="max-width:560px">
+  <div class="card-title">Edit Employee — {{ emp.name }}</div>
+  <form method="POST">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2"><label>Full Name</label><input name="name" value="{{ emp.name }}" required></div>
+      <div class="form-field"><label>Department</label>
+        <select name="dept">{% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}<option {{ 'selected' if emp.dept==d }}>{{ d }}</option>{% endfor %}</select>
+      </div>
+      <div class="form-field"><label>Role / Designation</label><input name="role" value="{{ emp.role }}"></div>
+      <div class="form-field"><label>Joining Date</label><input type="date" name="join_date" value="{{ emp.join_date }}"></div>
+      <div class="form-field"><label>Gross Salary (₹)</label><input type="number" name="salary" value="{{ emp.salary }}"></div>
+      <div class="form-field"><label>Status</label>
+        <select name="status"><option {{ 'selected' if emp.status=='active' }}>active</option><option {{ 'selected' if emp.status=='on-leave' }}>on-leave</option><option {{ 'selected' if emp.status=='inactive' }}>inactive</option></select>
+      </div>
+      <div class="form-field flex" style="align-items:center;gap:20px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="pf" style="width:auto" {{ 'checked' if emp.pf }}> PF</label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="esi" style="width:auto" {{ 'checked' if emp.esi }}> ESI</label>
+      </div>
+      <div class="form-field span-2" style="display:flex;gap:8px;justify-content:flex-end">
+        <a href="/hr" class="btn">Cancel</a>
+        <button class="btn btn-primary" type="submit">Save Changes</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
