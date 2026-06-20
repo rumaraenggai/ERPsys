@@ -1,0 +1,4247 @@
+
+================================================================================
+[PROJECT ROOT] C:\Users\user\Downloads\erp_app (5)\erp_app
+================================================================================
+
+
+[FILE] app.py
+
+import sys
+import os
+from flask import Flask
+from flask_login import LoginManager
+from modules.db import init_db
+from modules.hr import hr_bp
+from modules.projects import projects_bp
+from modules.timesheet import timesheet_bp
+from modules.salary import salary_bp
+from modules.biometric import biometric_bp
+from modules.leave import leave_bp
+from modules.tasks import tasks_bp
+from modules.dashboard import dashboard_bp
+from modules.reports import reports_bp
+from modules.holidays import holidays_bp
+from modules.auth import auth_bp, load_user
+import webbrowser
+
+app = Flask(__name__)
+from datetime import datetime
+app.jinja_env.filters['datetimeformat'] = lambda v, f: datetime.strptime(v, '%Y-%m-%d').strftime(f)
+app.secret_key = "erp-secret-key-change-in-prod"
+
+# Document uploads
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
+
+# Flask-Login
+login_manager = LoginManager(app)
+login_manager.login_view = "auth.login"
+login_manager.login_message = "Please log in to continue."
+login_manager.login_message_category = "error"
+login_manager.user_loader(load_user)
+
+# Register blueprints
+app.register_blueprint(auth_bp)
+app.register_blueprint(hr_bp, url_prefix="/hr")
+app.register_blueprint(projects_bp, url_prefix="/projects")
+app.register_blueprint(timesheet_bp, url_prefix="/timesheet")
+app.register_blueprint(salary_bp, url_prefix="/salary")
+app.register_blueprint(biometric_bp, url_prefix="/biometric")
+app.register_blueprint(leave_bp,      url_prefix="/leave")
+app.register_blueprint(tasks_bp,      url_prefix="/tasks")
+app.register_blueprint(dashboard_bp,  url_prefix="/dashboard")
+app.register_blueprint(reports_bp,    url_prefix="/reports")
+app.register_blueprint(holidays_bp,   url_prefix="/holidays")
+
+@app.route("/")
+def index():
+    from flask import redirect
+    return redirect("/dashboard")
+
+def open_browser():
+    webbrowser.open("http://127.0.0.1:5000")
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=False, host="0.0.0.0", port=5000, use_reloader=False)
+
+[FILE] fix_config.py
+
+from modules.db import get_conn
+
+conn = get_conn()
+conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+conn.execute("INSERT OR REPLACE INTO config(key, value) VALUES('essl_device', '192.168.1.7:4320')")
+conn.commit()
+
+rows = conn.execute("SELECT * FROM config").fetchall()
+for r in rows:
+    print(dict(r))
+conn.close()
+print("Done.")
+
+[FILE] modules\auth.py
+
+import bcrypt
+from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import UserMixin, login_user, logout_user, login_required
+from .db import get_conn
+
+auth_bp = Blueprint("auth", __name__)
+
+# ── User model ──────────────────────────────────────────────
+class User(UserMixin):
+    def __init__(self, row):
+        self.id          = str(row["id"])
+        self.username    = row["username"]
+        self.full_name   = row["full_name"]
+        self.role        = row["role"]       # admin | hr | user
+        self.active      = bool(row["active"])
+        self.employee_id = row["employee_id"] if row["employee_id"] else None
+
+    def get_id(self):
+        return self.id
+
+    @property
+    def is_admin(self):
+        return self.role == "admin"
+
+    @property
+    def is_hr(self):
+        return self.role in ("admin", "hr")
+
+    def can(self, module):
+        """Check role_permissions for this role + module. Admin always True."""
+        if self.role == "admin":
+            return True
+        conn = get_conn()
+        row  = conn.execute(
+            "SELECT allowed FROM role_permissions WHERE role=? AND module=?",
+            (self.role, module)
+        ).fetchone()
+        conn.close()
+        return bool(row["allowed"]) if row else False
+
+# Called by login_manager.user_loader
+def load_user(user_id):
+    conn = get_conn()
+    row  = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    conn.close()
+    return User(row) if row and row["active"] else None
+
+# ── Role guard decorator ─────────────────────────────────────
+from functools import wraps
+from flask_login import current_user
+
+def roles_required(*roles):
+    """Restrict a route to specific roles. Usage: @roles_required('admin','hr')"""
+    def decorator(f):
+        @wraps(f)
+        @login_required
+        def wrapped(*args, **kwargs):
+            if current_user.role not in roles:
+                flash("You don't have permission to access that page.", "error")
+                return redirect(url_for("hr.index"))
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+# ── Routes ──────────────────────────────────────────────────
+@auth_bp.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        conn = get_conn()
+        row  = conn.execute("SELECT * FROM users WHERE username=? AND active=1",
+                            (username,)).fetchone()
+        conn.close()
+        if row and bcrypt.checkpw(password.encode(), row["password"].encode()):
+            login_user(User(row), remember=bool(request.form.get("remember")))
+            return redirect(request.args.get("next") or url_for("hr.index"))
+        flash("Invalid username or password.", "error")
+    return render_template("login.html")
+
+@auth_bp.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    flash("You have been logged out.", "info")
+    return redirect(url_for("auth.login"))
+
+# ── User management (admin only) ────────────────────────────
+@auth_bp.route("/users")
+@roles_required("admin")
+def users():
+    conn  = get_conn()
+    users = conn.execute("SELECT id,username,full_name,role,active,employee_id FROM users").fetchall()
+    perms = conn.execute("SELECT * FROM role_permissions ORDER BY role,module").fetchall()
+    conn.close()
+    modules = ["timesheet", "projects", "leave", "tasks"]
+    roles   = ["hr", "user"]
+    # Build dict: {role: {module: allowed}}
+    perm_map = {r: {m: 0 for m in modules} for r in roles}
+    for p in perms:
+        if p["role"] in perm_map:
+            perm_map[p["role"]][p["module"]] = p["allowed"]
+    return render_template("users.html", users=users,
+                           perm_map=perm_map, modules=modules, roles=roles)
+
+@auth_bp.route("/users/add", methods=["POST"])
+@roles_required("admin")
+def add_user():
+    username  = request.form.get("username","").strip()
+    password  = request.form.get("password","")
+    full_name = request.form.get("full_name","").strip()
+    role      = request.form.get("role","viewer")
+    if not all([username, password, full_name]):
+        flash("All fields are required.", "error")
+        return redirect(url_for("auth.users"))
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    try:
+        conn = get_conn()
+        conn.execute("INSERT INTO users(username,password,full_name,role) VALUES(?,?,?,?)",
+                     (username, hashed, full_name, role))
+        conn.commit()
+        conn.close()
+        flash(f"User '{username}' created.", "success")
+    except Exception:
+        flash("Username already exists.", "error")
+    return redirect(url_for("auth.users"))
+
+@auth_bp.route("/users/toggle/<int:uid>", methods=["POST"])
+@roles_required("admin")
+def toggle_user(uid):
+    conn = get_conn()
+    conn.execute("UPDATE users SET active = 1 - active WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()
+    flash("User status updated.", "info")
+    return redirect(url_for("auth.users"))
+
+@auth_bp.route("/users/role/<int:uid>", methods=["POST"])
+@roles_required("admin")
+def change_role(uid):
+    new_role = request.form.get("role","viewer")
+    if new_role not in ("admin","hr","viewer"):
+        flash("Invalid role.", "error")
+        return redirect(url_for("auth.users"))
+    conn = get_conn()
+    conn.execute("UPDATE users SET role=? WHERE id=?", (new_role, uid))
+    conn.commit()
+    conn.close()
+    flash("Role updated.", "success")
+    return redirect(url_for("auth.users"))
+
+
+@roles_required("admin")
+def reset_password(uid):
+    new_pw = request.form.get("new_password","")
+    if len(new_pw) < 4:
+        flash("Password must be at least 4 characters.", "error")
+        return redirect(url_for("auth.users"))
+    hashed = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+    conn = get_conn()
+    conn.execute("UPDATE users SET password=? WHERE id=?", (hashed, uid))
+    conn.commit()
+    conn.close()
+    flash("Password reset.", "success")
+    return redirect(url_for("auth.users"))
+
+@auth_bp.route("/users/permissions", methods=["POST"])
+@roles_required("admin")
+def save_permissions():
+    modules = ["timesheet", "projects", "leave", "tasks"]
+    roles   = ["hr", "user"]
+    conn    = get_conn()
+    for role in roles:
+        for module in modules:
+            allowed = 1 if request.form.get(f"{role}_{module}") else 0
+            conn.execute("""
+                INSERT INTO role_permissions(role, module, allowed)
+                VALUES(?,?,?)
+                ON CONFLICT(role,module) DO UPDATE SET allowed=excluded.allowed
+            """, (role, module, allowed))
+    conn.commit()
+    conn.close()
+    flash("Permissions updated.", "success")
+    return redirect(url_for("auth.users"))
+
+[FILE] modules\biometric.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date
+import socket
+
+biometric_bp = Blueprint("biometric", __name__)
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _get_device_cfg():
+    """Return (ip, port) from the config table, falling back to env/defaults."""
+    try:
+        conn = get_conn()
+        row  = conn.execute(
+            "SELECT value FROM config WHERE key='essl_device'"
+        ).fetchone()
+        conn.close()
+        if row:
+            ip, port = row["value"].split(":", 1)
+            return ip.strip(), int(port.strip())
+    except Exception:
+        pass
+    return "192.168.1.7", 4320
+
+
+def _tcp_reachable(ip: str, port: int, timeout: float = 3.0) -> bool:
+    """Return True if a TCP connection to ip:port succeeds within *timeout* s."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+@biometric_bp.route("/status")
+@login_required
+def status():
+    """
+    JSON endpoint polled by the sidebar to show live device status.
+    Returns: { "connected": bool, "ip": str, "port": int }
+    No pyzk required — plain TCP probe only.
+    """
+    ip, port = _get_device_cfg()
+    ok = _tcp_reachable(ip, port)
+    return jsonify(connected=ok, ip=ip, port=port)
+
+
+@biometric_bp.route("/settings", methods=["POST"])
+@login_required
+def settings():
+    """Save a new device IP:port to the config table."""
+    ip   = request.form.get("essl_ip",   "").strip()
+    port = request.form.get("essl_port", "").strip()
+    if not ip or not port or not port.isdigit():
+        flash("Invalid IP or port.", "error")
+        return redirect(url_for("biometric.index"))
+    value = f"{ip}:{port}"
+    conn  = get_conn()
+    # Use INSERT OR REPLACE so it works whether the row exists or not
+    conn.execute("""
+        INSERT INTO config(key, value) VALUES('essl_device', ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (value,))
+    conn.commit()
+    conn.close()
+    flash(f"Device address updated to {value}.", "success")
+    return redirect(url_for("biometric.index"))
+
+
+@biometric_bp.route("/")
+@login_required
+def index():
+    today = str(date.today())
+    conn  = get_conn()
+    records = conn.execute("""
+        SELECT a.*, e.name as emp_name
+        FROM attendance a JOIN employees e ON e.id=a.employee_id
+        WHERE a.punch_date=?
+        ORDER BY a.punch_in
+    """, (today,)).fetchall()
+    employees = conn.execute("SELECT id, name FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    return render_template("biometric.html", records=records, employees=employees, today=today)
+
+@login_required
+@biometric_bp.route("/sync", methods=["POST"])
+def sync():
+    """
+    Pull live attendance from ESSL device using pyzk.
+    Install: pip install pyzk
+    Device must be on the same LAN (default port 4370).
+    """
+    cfg_ip, cfg_port = _get_device_cfg()
+    ip   = request.form.get("ip",   cfg_ip)
+    port = int(request.form.get("port", cfg_port))
+    try:
+        from zk import ZK
+        zk   = ZK(ip, port=port, timeout=5)
+        conn_zk = zk.connect()
+        conn_zk.disable_device()
+        attendances = conn_zk.get_attendance()
+        conn_zk.enable_device()
+        conn_zk.disconnect()
+
+        db   = get_conn()
+        saved = 0
+        for a in attendances:
+            emp = db.execute("SELECT id FROM employees WHERE name LIKE ?",
+                             (f"%{a.user_id}%",)).fetchone()
+            if not emp:
+                continue
+            punch_date = a.timestamp.strftime("%Y-%m-%d")
+            punch_time = a.timestamp.strftime("%H:%M")
+            existing   = db.execute("""
+                SELECT id FROM attendance
+                WHERE employee_id=? AND punch_date=? AND punch_in=?
+            """, (emp["id"], punch_date, punch_time)).fetchone()
+            if not existing:
+                db.execute("""
+                    INSERT INTO attendance(employee_id,punch_date,punch_in,source)
+                    VALUES(?,?,?,'essl')
+                """, (emp["id"], punch_date, punch_time))
+                saved += 1
+        db.commit()
+        db.close()
+        flash(f"Sync complete — {saved} new records imported from {ip}.", "success")
+    except ImportError:
+        flash("pyzk not installed. Run: pip install pyzk", "error")
+    except Exception as e:
+        flash(f"Sync failed: {e}", "error")
+
+    return redirect(url_for("biometric.index"))
+
+@login_required
+@biometric_bp.route("/manual", methods=["POST"])
+def manual():
+    f       = request.form
+    emp_id  = f.get("employee_id")
+    pdate   = f.get("punch_date")
+    pin     = f.get("punch_in")
+    pout    = f.get("punch_out", "")
+    if not all([emp_id, pdate, pin]):
+        flash("Employee, date and punch-in are required.", "error")
+        return redirect(url_for("biometric.index"))
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO attendance(employee_id,punch_date,punch_in,punch_out,source)
+        VALUES(?,?,?,?,'manual')
+    """, (emp_id, pdate, pin, pout or None))
+    conn.commit()
+    conn.close()
+    flash("Manual punch recorded.", "success")
+    return redirect(url_for("biometric.index"))
+
+[FILE] modules\dashboard.py
+
+from flask import Blueprint, render_template
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date
+
+dashboard_bp = Blueprint("dashboard", __name__)
+
+@dashboard_bp.route("/")
+@login_required
+def index():
+    conn  = get_conn()
+    today = str(date.today())
+    year  = date.today().year
+    month = date.today().month
+    emp_id = current_user.employee_id
+
+    # Metrics
+    total_emp   = conn.execute("SELECT COUNT(*) FROM employees WHERE status='active'").fetchone()[0]
+    present     = conn.execute("SELECT COUNT(DISTINCT employee_id) FROM attendance WHERE punch_date=?", (today,)).fetchone()[0]
+    active_proj = conn.execute("SELECT COUNT(*) FROM projects WHERE status='active'").fetchone()[0]
+    payroll     = conn.execute("SELECT SUM(salary) FROM employees WHERE status='active'").fetchone()[0] or 0
+    open_leaves = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status='pending'").fetchone()[0]
+    open_tasks  = conn.execute("SELECT COUNT(*) FROM tasks WHERE status != 'done'").fetchone()[0]
+
+    # My tasks (for non-admin)
+    my_tasks = []
+    if emp_id:
+        my_tasks = conn.execute("""
+            SELECT t.*, p.name as proj_name FROM tasks t
+            JOIN projects p ON p.id=t.project_id
+            WHERE t.assigned_to=? AND t.status != 'done'
+            ORDER BY t.due_date LIMIT 5
+        """, (emp_id,)).fetchall()
+
+    # Recent leave requests (for hr/admin)
+    recent_leaves = conn.execute("""
+        SELECT r.*, e.name as emp_name, lt.name as leave_name
+        FROM leave_requests r
+        JOIN employees e ON e.id=r.employee_id
+        JOIN leave_types lt ON lt.id=r.leave_type_id
+        WHERE r.status='pending'
+        ORDER BY r.applied_on DESC LIMIT 5
+    """).fetchall()
+
+    # Project burn
+    projects = conn.execute("""
+        SELECT name, budget, spent FROM projects
+        WHERE status='active' AND budget > 0
+        ORDER BY (spent*1.0/budget) DESC LIMIT 4
+    """).fetchall()
+
+    conn.close()
+    return render_template("dashboard.html",
+        total_emp=total_emp, present=present,
+        active_proj=active_proj, payroll=payroll,
+        open_leaves=open_leaves, open_tasks=open_tasks,
+        my_tasks=my_tasks, recent_leaves=recent_leaves,
+        projects=projects, today=today)
+
+[FILE] modules\db.py
+
+import sqlite3
+import os
+import bcrypt
+
+# DB path: use env var (Docker) or fall back to local
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH  = os.environ.get("ERP_DB_PATH",
+           os.path.join(BASE_DIR, "..", "erp.db"))
+
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def init_db():
+    conn = get_conn()
+    c = conn.cursor()
+
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS users (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        username    TEXT UNIQUE NOT NULL,
+        password    TEXT NOT NULL,
+        full_name   TEXT NOT NULL,
+        role        TEXT NOT NULL DEFAULT 'user',
+        active      INTEGER DEFAULT 1,
+        employee_id INTEGER UNIQUE REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS role_permissions (
+        role    TEXT NOT NULL,
+        module  TEXT NOT NULL,
+        allowed INTEGER DEFAULT 1,
+        PRIMARY KEY (role, module)
+    );
+
+    CREATE TABLE IF NOT EXISTS employees (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        name     TEXT NOT NULL,
+        dept     TEXT NOT NULL,
+        role     TEXT NOT NULL,
+        join_date TEXT NOT NULL,
+        salary   REAL NOT NULL,
+        pan      TEXT UNIQUE NOT NULL,
+        pf       INTEGER DEFAULT 1,
+        esi      INTEGER DEFAULT 0,
+        status   TEXT DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS projects (
+        id       TEXT PRIMARY KEY,
+        name     TEXT NOT NULL,
+        client   TEXT NOT NULL,
+        type     TEXT,
+        status   TEXT DEFAULT 'active',
+        start_date TEXT,
+        end_date   TEXT,
+        budget   REAL,
+        spent    REAL DEFAULT 0,
+        lead     TEXT,
+        billing_type TEXT DEFAULT 'Fixed price'
+    );
+
+    CREATE TABLE IF NOT EXISTS project_members (
+        project_id  TEXT,
+        employee_id INTEGER,
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        assigned_to INTEGER,
+        due_date    TEXT,
+        status      TEXT DEFAULT 'open',
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(assigned_to) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS holidays (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        name    TEXT NOT NULL,
+        date    TEXT UNIQUE NOT NULL,
+        year    INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS payslip_history (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        year        INTEGER,
+        month       INTEGER,
+        gross       REAL,
+        net         REAL,
+        generated_on TEXT DEFAULT (date('now')),
+        generated_by TEXT,
+        UNIQUE(employee_id, year, month),
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS milestones (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT,
+        name       TEXT,
+        due_date   TEXT,
+        done       INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS project_activities (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        UNIQUE(project_id, name),
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS timesheets (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        project_id  TEXT,
+        task_id     INTEGER,
+        activity_id INTEGER,
+        work_date   TEXT,
+        hours       REAL,
+        notes       TEXT,
+        status      TEXT DEFAULT 'draft',
+        FOREIGN KEY(employee_id) REFERENCES employees(id),
+        FOREIGN KEY(project_id)  REFERENCES projects(id),
+        FOREIGN KEY(task_id)     REFERENCES tasks(id),
+        FOREIGN KEY(activity_id) REFERENCES project_activities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS attendance (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        punch_date  TEXT,
+        punch_in    TEXT,
+        punch_out   TEXT,
+        source      TEXT DEFAULT 'manual',
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_types (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        name    TEXT UNIQUE NOT NULL,
+        days    INTEGER NOT NULL,
+        paid    INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_balances (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        leave_type_id INTEGER,
+        year        INTEGER,
+        allocated   REAL DEFAULT 0,
+        used        REAL DEFAULT 0,
+        UNIQUE(employee_id, leave_type_id, year),
+        FOREIGN KEY(employee_id)    REFERENCES employees(id),
+        FOREIGN KEY(leave_type_id)  REFERENCES leave_types(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_requests (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER,
+        leave_type_id INTEGER,
+        from_date   TEXT NOT NULL,
+        to_date     TEXT NOT NULL,
+        days        REAL NOT NULL,
+        reason      TEXT,
+        status      TEXT DEFAULT 'pending',
+        applied_on  TEXT DEFAULT (date('now')),
+        reviewed_by TEXT,
+        reviewed_on TEXT,
+        remarks     TEXT,
+        FOREIGN KEY(employee_id)   REFERENCES employees(id),
+        FOREIGN KEY(leave_type_id) REFERENCES leave_types(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS smtp_config (
+        id       INTEGER PRIMARY KEY CHECK (id=1),
+        sender   TEXT,
+        password TEXT,
+        host     TEXT DEFAULT 'smtp.office365.com',
+        port     INTEGER DEFAULT 587
+    );
+
+    CREATE TABLE IF NOT EXISTS employee_documents (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id  INTEGER NOT NULL,
+        doc_type     TEXT NOT NULL,
+        filename     TEXT NOT NULL,
+        stored_name  TEXT NOT NULL,
+        uploaded_on  TEXT DEFAULT (date('now')),
+        uploaded_by  TEXT,
+        notes        TEXT,
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
+    );
+    """)
+    conn.commit()
+
+    # Seed demo employees if empty
+    if c.execute("SELECT COUNT(*) FROM employees").fetchone()[0] == 0:
+        c.executemany("""
+            INSERT INTO employees(name,dept,role,join_date,salary,pan,pf,esi,status)
+            VALUES(?,?,?,?,?,?,?,?,?)
+        """, [
+            ("Ravi Sharma",    "Engineering", "Senior Engineer",  "2021-03-15", 85000, "ABCDE1234F", 1, 0, "active"),
+            ("Priya Nair",     "Engineering", "Engineer",         "2022-07-01", 65000, "FGHIJ5678K", 1, 0, "active"),
+            ("Amit Joshi",     "Projects",    "Project Manager",  "2020-01-10", 95000, "KLMNO9012P", 1, 0, "active"),
+            ("Sneha Patil",    "HR",          "HR Executive",     "2023-04-01", 45000, "QRSTU3456V", 1, 1, "active"),
+            ("Mohammed Khan",  "Accounts",    "Accountant",       "2021-11-20", 55000, "WXYZA7890B", 1, 1, "active"),
+            ("Deepa Reddy",    "Engineering", "Engineer",         "2022-09-15", 62000, "CDEFG2345H", 1, 0, "active"),
+            ("Suresh Kumar",   "Projects",    "Site Engineer",    "2019-06-01", 58000, "HIJKL6789M", 1, 1, "on-leave"),
+            ("Anjali Shah",    "Admin",       "Office Manager",   "2022-02-14", 42000, "NOPQR0123S", 1, 1, "active"),
+        ])
+        conn.commit()
+
+    # Seed default users if empty
+    if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+        defaults = [
+            ("admin", "admin123", "Administrator", "admin"),
+            ("hr",    "hr123",    "HR Manager",    "hr"),
+        ]
+        for username, password, full_name, role in defaults:
+            hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+            c.execute(
+                "INSERT INTO users(username,password,full_name,role) VALUES(?,?,?,?)",
+                (username, hashed.decode(), full_name, role)
+            )
+        conn.commit()
+
+    # Seed default role permissions if empty
+    if c.execute("SELECT COUNT(*) FROM role_permissions").fetchone()[0] == 0:
+        # modules: timesheet, projects, leave
+        # admin and hr get everything; user gets timesheet+leave only by default
+        perms = []
+        for mod in ["timesheet", "projects", "leave", "tasks"]:
+            perms.append(("admin", mod, 1))
+            perms.append(("hr",    mod, 1))
+        perms.append(("user", "timesheet", 1))
+        perms.append(("user", "projects",  0))
+        perms.append(("user", "leave",     1))
+        perms.append(("user", "tasks",     1))
+        c.executemany(
+            "INSERT OR IGNORE INTO role_permissions(role,module,allowed) VALUES(?,?,?)", perms
+        )
+        conn.commit()
+
+    # Seed default leave types
+    if c.execute("SELECT COUNT(*) FROM leave_types").fetchone()[0] == 0:
+        c.executemany("INSERT INTO leave_types(name,days,paid) VALUES(?,?,?)", [
+            ("Casual Leave",   12, 1),
+            ("Sick Leave",     12, 1),
+            ("Earned Leave",   15, 1),
+            ("Maternity Leave",180, 1),
+            ("Leave Without Pay", 0, 0),
+        ])
+        conn.commit()
+        # Allocate balances for all existing employees for current year
+        from datetime import date as _date
+        year = _date.today().year
+        emps  = c.execute("SELECT id FROM employees").fetchall()
+        types = c.execute("SELECT id, days FROM leave_types WHERE paid=1").fetchall()
+        for emp in emps:
+            for lt in types:
+                c.execute("""
+                    INSERT OR IGNORE INTO leave_balances(employee_id,leave_type_id,year,allocated,used)
+                    VALUES(?,?,?,?,0)
+                """, (emp["id"], lt["id"], year, lt["days"]))
+        conn.commit()
+
+    # Ensure employee_documents table exists on older DBs
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS employee_documents (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id  INTEGER NOT NULL,
+            doc_type     TEXT NOT NULL,
+            filename     TEXT NOT NULL,
+            stored_name  TEXT NOT NULL,
+            uploaded_on  TEXT DEFAULT (date('now')),
+            uploaded_by  TEXT,
+            notes        TEXT,
+            FOREIGN KEY(employee_id) REFERENCES employees(id)
+        )
+    """)
+    conn.commit()
+
+    # Live migrations for existing databases
+    existing_cols = [r[1] for r in c.execute("PRAGMA table_info(timesheets)").fetchall()]
+    if "activity_id" not in existing_cols:
+        c.execute("ALTER TABLE timesheets ADD COLUMN activity_id INTEGER REFERENCES project_activities(id)")
+        conn.commit()
+
+    # Seed default ESSL device address if not already set
+    # Ensure config table exists
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    conn.commit()
+
+    if c.execute("SELECT COUNT(*) FROM config WHERE key='essl_device'").fetchone()[0] == 0:
+        c.execute("INSERT INTO config(key, value) VALUES('essl_device', '192.168.1.7:4320')")
+        conn.commit()
+
+    conn.close()
+
+[FILE] modules\email_dispatch.py
+
+# modules/email_dispatch.py
+# Sends payslip PDF via Outlook/Office 365 SMTP
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
+
+SMTP_HOST = "smtp.office365.com"
+SMTP_PORT = 587
+
+def send_payslip_email(sender_email, sender_password, recipient_email,
+                       emp_name, month_name, year, pdf_buf, pdf_filename):
+    """
+    Send payslip PDF as attachment via Outlook SMTP.
+    pdf_buf: io.BytesIO object from generate_payslip()
+    """
+    msg = MIMEMultipart()
+    msg["From"]    = sender_email
+    msg["To"]      = recipient_email
+    msg["Subject"] = f"Salary Slip — {month_name} {year}"
+
+    body = f"""Dear {emp_name},
+
+Please find attached your salary slip for {month_name} {year}.
+
+This is a system-generated email. Please do not reply to this message.
+For any queries, contact the HR department.
+
+Regards,
+HR & Payroll Team
+"""
+    msg.attach(MIMEText(body, "plain"))
+
+    # Attach PDF
+    pdf_buf.seek(0)
+    part = MIMEBase("application", "octet-stream")
+    part.set_payload(pdf_buf.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
+    msg.attach(part)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, recipient_email, msg.as_string())
+
+[FILE] modules\excel_payroll.py
+
+# modules/excel_payroll.py
+# Requires: pip install openpyxl
+import io
+from openpyxl import Workbook
+from openpyxl.styles import (Font, PatternFill, Alignment, Border, Side,
+                              numbers)
+from openpyxl.utils import get_column_letter
+
+BLUE      = "185FA5"
+BLUE_LITE = "E6F1FB"
+GRAY      = "F5F4F0"
+RED_LITE  = "FCEBEB"
+GREEN_LITE= "EAF3DE"
+
+def _border(style="thin"):
+    s = Side(style=style, color="D5D3CB")
+    return Border(left=s, right=s, top=s, bottom=s)
+
+def _fill(hex_color):
+    return PatternFill("solid", fgColor=hex_color)
+
+def _hdr(ws, row, col, value, bold=True, bg=BLUE, fg="FFFFFF", wrap=False):
+    c = ws.cell(row=row, column=col, value=value)
+    c.font      = Font(bold=bold, color=fg, size=9)
+    c.fill      = _fill(bg)
+    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=wrap)
+    c.border    = _border()
+    return c
+
+def _cell(ws, row, col, value, fmt=None, bold=False, bg=None, align="left"):
+    c = ws.cell(row=row, column=col, value=value)
+    c.font      = Font(bold=bold, size=9)
+    c.alignment = Alignment(horizontal=align, vertical="center")
+    c.border    = _border()
+    if bg:
+        c.fill = _fill(bg)
+    if fmt:
+        c.number_format = fmt
+    return c
+
+def generate_payroll_register(employees, calc_salary_fn, year, month, month_name):
+    wb = Workbook()
+
+    # ── Sheet 1: Payroll Register ──────────────────────────────────────────
+    ws = wb.active
+    ws.title = f"Payroll {month_name} {year}"
+    ws.freeze_panes = "B4"
+    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[2].height = 16
+    ws.row_dimensions[3].height = 30
+
+    # Title
+    ws.merge_cells("A1:P1")
+    title = ws["A1"]
+    title.value     = f"PAYROLL REGISTER — {month_name.upper()} {year}"
+    title.font      = Font(bold=True, size=13, color=BLUE)
+    title.alignment = Alignment(horizontal="center", vertical="center")
+    title.fill      = _fill(BLUE_LITE)
+
+    # Section headers row 2
+    for col, (label, span_end) in enumerate([
+        ("EMPLOYEE DETAILS", 4),
+        ("EARNINGS", 8),
+        ("DEDUCTIONS", 13),
+        ("NET", 14),
+    ], start=1):
+        pass  # handled below via merge
+
+    merges = [(1,4,"EMPLOYEE DETAILS"), (5,9,"EARNINGS"),
+              (10,14,"DEDUCTIONS"), (15,15,"NET PAY")]
+    col = 1
+    for s, e, label in merges:
+        ws.merge_cells(start_row=2, start_column=s, end_row=2, end_column=e)
+        _hdr(ws, 2, s, label, bg=BLUE if label!="NET PAY" else "0C447C")
+
+    # Column headers row 3
+    headers = [
+        "Sr.", "Name", "Department", "Designation",
+        "Gross (₹)", "Basic (₹)", "HRA (₹)", "Special (₹)", "Days Worked",
+        "PF (₹)", "ESI (₹)", "Prof. Tax (₹)", "TDS (₹)", "Total Ded. (₹)",
+        "Net Pay (₹)"
+    ]
+    col_widths = [5, 22, 16, 18, 12, 12, 10, 10, 10, 10, 8, 10, 10, 12, 13]
+    for i, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        _hdr(ws, 3, i, h, bg="1A3A5C", wrap=True)
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Data rows
+    totals = [0] * 15
+    INR = '#,##0.00'
+    for sr, emp in enumerate(employees, start=1):
+        slip = calc_salary_fn(emp, year, month)
+        row  = 3 + sr
+        bg   = GRAY if sr % 2 == 0 else "FFFFFF"
+
+        values = [
+            sr, emp["name"], emp["dept"], emp["role"],
+            slip["gross"], slip["basic"], slip["hra"], slip["special"],
+            slip.get("worked_days", "—"),
+            slip["pf"] if emp["pf"] else 0,
+            slip["esi"] if emp["esi"] else 0,
+            slip["pt"], slip["tds"], slip["total_ded"],
+            slip["net"]
+        ]
+        fmts   = [None, None, None, None, INR, INR, INR, INR, None,
+                  INR, INR, INR, INR, INR, INR]
+        aligns = ["center","left","left","left",
+                  "right","right","right","right","center",
+                  "right","right","right","right","right","right"]
+
+        for col, (val, fmt, aln) in enumerate(zip(values, fmts, aligns), start=1):
+            _cell(ws, row, col, val, fmt=fmt, bg=bg, align=aln)
+            if isinstance(val, (int, float)):
+                totals[col-1] = totals[col-1] + val
+
+    # Totals row
+    trow = 3 + len(employees) + 1
+    ws.merge_cells(start_row=trow, start_column=1, end_row=trow, end_column=4)
+    c = ws.cell(row=trow, column=1, value="TOTALS")
+    c.font = Font(bold=True, size=9, color="FFFFFF")
+    c.fill = _fill(BLUE)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    c.border = _border()
+
+    skip = {0,1,2,3,8}   # Sr., Name, Dept, Role, Days Worked — no total
+    for col in range(5, 16):
+        val = totals[col-1] if col-1 not in skip else ""
+        c = ws.cell(row=trow, column=col, value=val if val else "")
+        c.font      = Font(bold=True, size=9, color="FFFFFF")
+        c.fill      = _fill(BLUE)
+        c.alignment = Alignment(horizontal="right", vertical="center")
+        c.border    = _border()
+        if val:
+            c.number_format = INR
+
+    ws.row_dimensions[trow].height = 18
+
+    # ── Sheet 2: PF & ESI Register ────────────────────────────────────────
+    ws2 = wb.create_sheet("PF & ESI Register")
+    ws2.freeze_panes = "A3"
+
+    ws2.merge_cells("A1:H1")
+    h = ws2["A1"]
+    h.value     = f"PF & ESI STATUTORY REGISTER — {month_name.upper()} {year}"
+    h.font      = Font(bold=True, size=12, color=BLUE)
+    h.alignment = Alignment(horizontal="center", vertical="center")
+    h.fill      = _fill(BLUE_LITE)
+    ws2.row_dimensions[1].height = 24
+
+    stat_hdrs = ["Sr.","Name","Gross (₹)","Basic (₹)",
+                 "PF Employee (₹)","PF Employer (₹)","ESI Employee (₹)","ESI Employer (₹)"]
+    stat_widths = [5, 24, 14, 14, 16, 16, 16, 16]
+    for i, (h_text, w) in enumerate(zip(stat_hdrs, stat_widths), start=1):
+        _hdr(ws2, 2, i, h_text, bg="1A3A5C", wrap=True)
+        ws2.column_dimensions[get_column_letter(i)].width = w
+
+    pf_eligible = [e for e in employees if e["pf"]]
+    for sr, emp in enumerate(pf_eligible, start=1):
+        slip = calc_salary_fn(emp, year, month)
+        row  = 2 + sr
+        bg   = GRAY if sr % 2 == 0 else "FFFFFF"
+        pf_emp  = slip["pf"]
+        pf_er   = round(min(slip["basic"], 15000) * 0.12)   # employer same as employee
+        esi_emp = slip["esi"] if emp["esi"] else 0
+        esi_er  = round(slip["gross"] * 0.0325) if emp["esi"] else 0  # employer 3.25%
+
+        for col, (val, fmt, aln) in enumerate(zip(
+            [sr, emp["name"], slip["gross"], slip["basic"],
+             pf_emp, pf_er, esi_emp, esi_er],
+            [None, None, INR, INR, INR, INR, INR, INR],
+            ["center","left","right","right","right","right","right","right"]
+        ), start=1):
+            _cell(ws2, row, col, val, fmt=fmt, bg=bg, align=aln)
+
+    # ── Sheet 3: Department Summary ───────────────────────────────────────
+    ws3 = wb.create_sheet("Dept Summary")
+    ws3.merge_cells("A1:F1")
+    h3 = ws3["A1"]
+    h3.value     = f"DEPARTMENT COST SUMMARY — {month_name.upper()} {year}"
+    h3.font      = Font(bold=True, size=12, color=BLUE)
+    h3.alignment = Alignment(horizontal="center", vertical="center")
+    h3.fill      = _fill(BLUE_LITE)
+    ws3.row_dimensions[1].height = 24
+
+    dept_hdrs = ["Department","Headcount","Gross Payroll (₹)",
+                 "Total Deductions (₹)","Net Payroll (₹)","Avg Salary (₹)"]
+    dept_widths = [22, 12, 18, 18, 16, 16]
+    for i, (h_text, w) in enumerate(zip(dept_hdrs, dept_widths), start=1):
+        _hdr(ws3, 2, i, h_text, bg="1A3A5C")
+        ws3.column_dimensions[get_column_letter(i)].width = w
+
+    dept_map = {}
+    for emp in employees:
+        slip = calc_salary_fn(emp, year, month)
+        d = emp["dept"]
+        if d not in dept_map:
+            dept_map[d] = {"count":0, "gross":0, "ded":0, "net":0}
+        dept_map[d]["count"] += 1
+        dept_map[d]["gross"] += slip["gross"]
+        dept_map[d]["ded"]   += slip["total_ded"]
+        dept_map[d]["net"]   += slip["net"]
+
+    for sr, (dept, d) in enumerate(sorted(dept_map.items()), start=1):
+        row = 2 + sr
+        bg  = GRAY if sr % 2 == 0 else "FFFFFF"
+        avg = d["gross"] / d["count"]
+        for col, (val, fmt, aln) in enumerate(zip(
+            [dept, d["count"], d["gross"], d["ded"], d["net"], avg],
+            [None, None, INR, INR, INR, INR],
+            ["left","center","right","right","right","right"]
+        ), start=1):
+            _cell(ws3, row, col, val, fmt=fmt, bg=bg, align=aln)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+[FILE] modules\holidays.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date
+
+holidays_bp = Blueprint("holidays", __name__)
+
+@holidays_bp.route("/")
+@login_required
+def index():
+    year = int(request.args.get("year", date.today().year))
+    conn = get_conn()
+    holidays = conn.execute(
+        "SELECT * FROM holidays WHERE year=? ORDER BY date", (year,)
+    ).fetchall()
+    conn.close()
+    return render_template("holidays.html", holidays=holidays, year=year)
+
+@holidays_bp.route("/add", methods=["POST"])
+@login_required
+def add():
+    if current_user.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("holidays.index"))
+    name = request.form.get("name","").strip()
+    dt   = request.form.get("date","").strip()
+    if not name or not dt:
+        flash("Name and date are required.", "error")
+        return redirect(url_for("holidays.index"))
+    year = int(dt[:4])
+    conn = get_conn()
+    try:
+        conn.execute("INSERT INTO holidays(name,date,year) VALUES(?,?,?)", (name,dt,year))
+        conn.commit()
+        flash(f"Holiday '{name}' added.", "success")
+    except Exception:
+        flash("Date already exists.", "error")
+    conn.close()
+    return redirect(url_for("holidays.index", year=year))
+
+@holidays_bp.route("/delete/<int:hid>", methods=["POST"])
+@login_required
+def delete(hid):
+    if current_user.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("holidays.index"))
+    conn = get_conn()
+    conn.execute("DELETE FROM holidays WHERE id=?", (hid,))
+    conn.commit(); conn.close()
+    flash("Holiday removed.", "info")
+    return redirect(url_for("holidays.index"))
+
+[FILE] modules\hr.py
+
+import re
+import os
+import uuid
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, send_from_directory, abort
+from flask_login import login_required, current_user
+from .db import get_conn
+from .auth import roles_required
+
+ALLOWED_EXTENSIONS = {"pdf","png","jpg","jpeg","docx","xlsx","txt"}
+DOC_TYPES = ["Offer Letter","Appointment Letter","ID Proof","Address Proof",
+             "Educational Certificate","Experience Letter","PAN Card",
+             "Aadhaar Card","Passport","Photo","Contract","Other"]
+
+def _allowed(filename):
+    return "." in filename and filename.rsplit(".",1)[1].lower() in ALLOWED_EXTENSIONS
+
+hr_bp = Blueprint("hr", __name__)
+
+PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+
+@hr_bp.route("/")
+@login_required
+def index():
+    conn = get_conn()
+    q        = request.args.get("q", "").strip()
+    dept     = request.args.get("dept", "")
+    show_all = request.args.get("show_all", "")
+    sql      = "SELECT * FROM employees WHERE 1=1"
+    params   = []
+    if not show_all:
+        sql += " AND status != 'inactive'"
+    if q:
+        sql += " AND name LIKE ?"; params.append(f"%{q}%")
+    if dept:
+        sql += " AND dept=?"; params.append(dept)
+    employees = conn.execute(sql, params).fetchall()
+    conn.close()
+    return render_template("hr.html", employees=employees, q=q, dept=dept, show_all=show_all)
+
+@hr_bp.route("/add", methods=["POST"])
+@roles_required("admin", "hr")
+def add():
+    f = request.form
+    errors = {}
+    name    = f.get("name", "").strip()
+    dept    = f.get("dept", "").strip()
+    role    = f.get("role", "").strip()
+    join    = f.get("join_date", "").strip()
+    salary  = f.get("salary", "").strip()
+    pan     = f.get("pan", "").strip().upper()
+    pf      = 1 if f.get("pf") else 0
+    esi     = 1 if f.get("esi") else 0
+
+    if not name:   errors["name"]   = "Name is required"
+    if not dept:   errors["dept"]   = "Department is required"
+    if not role:   errors["role"]   = "Role is required"
+    if not join:   errors["join"]   = "Joining date is required"
+    if not salary or not salary.replace(".","").isdigit():
+                   errors["salary"] = "Valid salary required"
+    if not pan:    errors["pan"]    = "PAN is required"
+    elif not PAN_RE.match(pan): errors["pan"] = "Invalid PAN format"
+
+    if not errors:
+        try:
+            import bcrypt as _bcrypt
+            conn = get_conn()
+            cur  = conn.execute("""
+                INSERT INTO employees(name,dept,role,join_date,salary,pan,pf,esi)
+                VALUES(?,?,?,?,?,?,?,?)
+            """, (name, dept, role, join, float(salary), pan, pf, esi))
+            emp_id = cur.lastrowid
+
+            # Auto-create login: username = firstname.lastname (lowercase)
+            parts    = name.lower().split()
+            username = parts[0] + ("." + parts[-1] if len(parts) > 1 else "")
+            # Default password = PAN (lowercase) — user should change on first login
+            raw_pw   = pan.lower()
+            hashed   = _bcrypt.hashpw(raw_pw.encode(), _bcrypt.gensalt()).decode()
+            # Handle duplicate usernames by appending emp_id
+            try:
+                conn.execute("""
+                    INSERT INTO users(username,password,full_name,role,employee_id)
+                    VALUES(?,?,?,'user',?)
+                """, (username, hashed, name, emp_id))
+            except Exception:
+                conn.execute("""
+                    INSERT INTO users(username,password,full_name,role,employee_id)
+                    VALUES(?,?,?,'user',?)
+                """, (f"{username}{emp_id}", hashed, name, emp_id))
+
+            conn.commit()
+            conn.close()
+            flash(f"{name} added. Login: {username} / Password: {pan.lower()} (share securely — employee should change it).", "success")
+            return redirect(url_for("hr.index"))
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                errors["pan"] = "PAN already exists"
+
+    flash("Please fix the errors below.", "error")
+    return render_template("hr.html",
+        employees=get_conn().execute("SELECT * FROM employees").fetchall(),
+        errors=errors, form=f, q="", dept="")
+
+@hr_bp.route("/delete/<int:emp_id>", methods=["POST"])
+@roles_required("admin")
+def delete(emp_id):
+    conn = get_conn()
+    conn.execute("UPDATE employees SET status='inactive' WHERE id=?", (emp_id,))
+    conn.commit()
+    conn.close()
+    flash("Employee marked inactive.", "info")
+    return redirect(url_for("hr.index"))
+
+@hr_bp.route("/edit/<int:emp_id>", methods=["GET","POST"])
+@roles_required("admin","hr")
+def edit(emp_id):
+    conn = get_conn()
+    emp  = conn.execute("SELECT * FROM employees WHERE id=?", (emp_id,)).fetchone()
+    if not emp:
+        flash("Employee not found.", "error")
+        return redirect(url_for("hr.index"))
+    if request.method == "POST":
+        f = request.form
+        conn.execute("""
+            UPDATE employees SET name=?,dept=?,role=?,join_date=?,salary=?,pf=?,esi=?,status=?
+            WHERE id=?
+        """, (f["name"],f["dept"],f["role"],f["join_date"],float(f["salary"]),
+              1 if f.get("pf") else 0, 1 if f.get("esi") else 0,
+              f.get("status","active"), emp_id))
+        conn.commit(); conn.close()
+        flash("Employee updated.", "success")
+        return redirect(url_for("hr.index"))
+    conn.close()
+    return render_template("hr_edit.html", emp=emp)
+
+# ── Document Management ──────────────────────────────────────
+
+@hr_bp.route("/<int:emp_id>/documents")
+@login_required
+def documents(emp_id):
+    conn = get_conn()
+    emp  = conn.execute("SELECT id,name FROM employees WHERE id=?", (emp_id,)).fetchone()
+    if not emp:
+        abort(404)
+    docs = conn.execute(
+        "SELECT * FROM employee_documents WHERE employee_id=? ORDER BY uploaded_on DESC",
+        (emp_id,)
+    ).fetchall()
+    conn.close()
+    return render_template("hr_documents.html", emp=emp, docs=docs, doc_types=DOC_TYPES)
+
+@hr_bp.route("/<int:emp_id>/documents/upload", methods=["POST"])
+@roles_required("admin","hr")
+def upload_document(emp_id):
+    file     = request.files.get("file")
+    doc_type = request.form.get("doc_type","Other").strip()
+    notes    = request.form.get("notes","").strip()
+
+    if not file or file.filename == "":
+        flash("No file selected.", "error")
+        return redirect(url_for("hr.documents", emp_id=emp_id))
+    if not _allowed(file.filename):
+        flash(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", "error")
+        return redirect(url_for("hr.documents", emp_id=emp_id))
+
+    # Store with UUID to avoid collisions
+    ext         = file.filename.rsplit(".",1)[1].lower()
+    stored_name = f"{emp_id}_{uuid.uuid4().hex}.{ext}"
+    save_path   = os.path.join(current_app.config["UPLOAD_FOLDER"], stored_name)
+    file.save(save_path)
+
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO employee_documents(employee_id,doc_type,filename,stored_name,uploaded_by,notes)
+        VALUES(?,?,?,?,?,?)
+    """, (emp_id, doc_type, file.filename, stored_name, current_user.full_name, notes))
+    conn.commit(); conn.close()
+    flash(f"'{file.filename}' uploaded successfully.", "success")
+    return redirect(url_for("hr.documents", emp_id=emp_id))
+
+@hr_bp.route("/<int:emp_id>/documents/download/<int:doc_id>")
+@login_required
+def download_document(emp_id, doc_id):
+    conn = get_conn()
+    doc  = conn.execute(
+        "SELECT * FROM employee_documents WHERE id=? AND employee_id=?",
+        (doc_id, emp_id)
+    ).fetchone()
+    conn.close()
+    if not doc:
+        abort(404)
+    return send_from_directory(
+        current_app.config["UPLOAD_FOLDER"],
+        doc["stored_name"],
+        as_attachment=True,
+        download_name=doc["filename"]
+    )
+
+@hr_bp.route("/<int:emp_id>/documents/delete/<int:doc_id>", methods=["POST"])
+@roles_required("admin","hr")
+def delete_document(emp_id, doc_id):
+    conn = get_conn()
+    doc  = conn.execute(
+        "SELECT * FROM employee_documents WHERE id=? AND employee_id=?",
+        (doc_id, emp_id)
+    ).fetchone()
+    if doc:
+        # Remove file from disk
+        fpath = os.path.join(current_app.config["UPLOAD_FOLDER"], doc["stored_name"])
+        if os.path.exists(fpath):
+            os.remove(fpath)
+        conn.execute("DELETE FROM employee_documents WHERE id=?", (doc_id,))
+        conn.commit()
+        flash("Document deleted.", "info")
+    conn.close()
+    return redirect(url_for("hr.documents", emp_id=emp_id))
+
+[FILE] modules\leave.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date, datetime
+
+leave_bp = Blueprint("leave", __name__)
+
+def _working_days(from_date, to_date):
+    """Count Mon–Sat between two dates (excluding Sundays)."""
+    from datetime import timedelta
+    d, count = datetime.strptime(from_date, "%Y-%m-%d").date(), 0
+    end = datetime.strptime(to_date, "%Y-%m-%d").date()
+    while d <= end:
+        if d.weekday() != 6:   # 6 = Sunday
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+def _ensure_balance(conn, emp_id, lt_id, year, allocated):
+    """Create balance row if missing (e.g. new employee or new leave type)."""
+    conn.execute("""
+        INSERT OR IGNORE INTO leave_balances(employee_id,leave_type_id,year,allocated,used)
+        VALUES(?,?,?,?,0)
+    """, (emp_id, lt_id, year, allocated))
+
+@leave_bp.route("/")
+@login_required
+def index():
+    conn = get_conn()
+    emp_filter = request.args.get("emp", "")
+    status_filter = request.args.get("status", "")
+    year = int(request.args.get("year", date.today().year))
+
+    sql = """
+        SELECT r.*, e.name as emp_name, lt.name as leave_name, lt.paid
+        FROM leave_requests r
+        JOIN employees e  ON e.id  = r.employee_id
+        JOIN leave_types lt ON lt.id = r.leave_type_id
+        WHERE 1=1
+    """
+    params = []
+    if emp_filter:
+        sql += " AND r.employee_id=?"; params.append(emp_filter)
+    if status_filter:
+        sql += " AND r.status=?"; params.append(status_filter)
+    sql += " ORDER BY r.applied_on DESC"
+
+    requests_ = conn.execute(sql, params).fetchall()
+    employees  = conn.execute("SELECT id, name FROM employees WHERE status='active'").fetchall()
+    leave_types = conn.execute("SELECT * FROM leave_types").fetchall()
+
+    # Balances for summary card
+    balances = conn.execute("""
+        SELECT lb.*, e.name as emp_name, lt.name as leave_name
+        FROM leave_balances lb
+        JOIN employees e   ON e.id  = lb.employee_id
+        JOIN leave_types lt ON lt.id = lb.leave_type_id
+        WHERE lb.year=?
+        ORDER BY e.name, lt.name
+    """, (year,)).fetchall()
+
+    conn.close()
+    return render_template("leave.html",
+        requests=requests_, employees=employees,
+        leave_types=leave_types, balances=balances,
+        emp_filter=emp_filter, status_filter=status_filter,
+        year=year, today=str(date.today()))
+
+@leave_bp.route("/apply", methods=["POST"])
+@login_required
+def apply():
+    f         = request.form
+    emp_id    = f.get("employee_id")
+    lt_id     = f.get("leave_type_id")
+    from_date = f.get("from_date")
+    to_date   = f.get("to_date")
+    reason    = f.get("reason", "").strip()
+
+    if not all([emp_id, lt_id, from_date, to_date]):
+        flash("All fields are required.", "error")
+        return redirect(url_for("leave.index"))
+    if to_date < from_date:
+        flash("End date must be on or after start date.", "error")
+        return redirect(url_for("leave.index"))
+
+    days = _working_days(from_date, to_date)
+    year = int(from_date[:4])
+
+    conn = get_conn()
+    lt   = conn.execute("SELECT * FROM leave_types WHERE id=?", (lt_id,)).fetchone()
+    _ensure_balance(conn, emp_id, lt_id, year, lt["days"])
+
+    bal = conn.execute("""
+        SELECT * FROM leave_balances
+        WHERE employee_id=? AND leave_type_id=? AND year=?
+    """, (emp_id, lt_id, year)).fetchone()
+
+    available = (bal["allocated"] - bal["used"]) if bal else 0
+    if lt["paid"] and days > available:
+        flash(f"Insufficient balance. Available: {available:.0f} days, Requested: {days} days.", "error")
+        conn.close()
+        return redirect(url_for("leave.index"))
+
+    conn.execute("""
+        INSERT INTO leave_requests(employee_id,leave_type_id,from_date,to_date,days,reason)
+        VALUES(?,?,?,?,?,?)
+    """, (emp_id, lt_id, from_date, to_date, days, reason))
+    conn.commit()
+    conn.close()
+    flash(f"Leave application submitted — {days} working day(s).", "success")
+    return redirect(url_for("leave.index"))
+
+@leave_bp.route("/review/<int:req_id>", methods=["POST"])
+@login_required
+def review(req_id):
+    from .auth import roles_required
+    if current_user.role not in ("admin", "hr"):
+        flash("Only HR/Admin can approve or reject leave.", "error")
+        return redirect(url_for("leave.index"))
+
+    action  = request.form.get("action")   # approve | reject
+    remarks = request.form.get("remarks", "").strip()
+    today   = str(date.today())
+
+    conn = get_conn()
+    req  = conn.execute("SELECT * FROM leave_requests WHERE id=?", (req_id,)).fetchone()
+    if not req:
+        flash("Request not found.", "error")
+        conn.close()
+        return redirect(url_for("leave.index"))
+
+    new_status = "approved" if action == "approve" else "rejected"
+    conn.execute("""
+        UPDATE leave_requests
+        SET status=?, reviewed_by=?, reviewed_on=?, remarks=?
+        WHERE id=?
+    """, (new_status, current_user.full_name, today, remarks, req_id))
+
+    # Deduct balance on approval
+    if new_status == "approved":
+        year = int(req["from_date"][:4])
+        _ensure_balance(conn, req["employee_id"], req["leave_type_id"], year, 0)
+        conn.execute("""
+            UPDATE leave_balances SET used = used + ?
+            WHERE employee_id=? AND leave_type_id=? AND year=?
+        """, (req["days"], req["employee_id"], req["leave_type_id"], year))
+
+    conn.commit()
+    conn.close()
+    flash(f"Leave {new_status}.", "success")
+    return redirect(url_for("leave.index"))
+
+@leave_bp.route("/cancel/<int:req_id>", methods=["POST"])
+@login_required
+def cancel(req_id):
+    conn = get_conn()
+    req  = conn.execute("SELECT * FROM leave_requests WHERE id=?", (req_id,)).fetchone()
+    if req and req["status"] == "approved":
+        year = int(req["from_date"][:4])
+        conn.execute("""
+            UPDATE leave_balances SET used = MAX(0, used - ?)
+            WHERE employee_id=? AND leave_type_id=? AND year=?
+        """, (req["days"], req["employee_id"], req["leave_type_id"], year))
+    conn.execute("UPDATE leave_requests SET status='cancelled' WHERE id=?", (req_id,))
+    conn.commit()
+    conn.close()
+    flash("Leave cancelled.", "info")
+    return redirect(url_for("leave.index"))
+
+[FILE] modules\pdf_payslip.py
+
+# modules/pdf_payslip.py
+# Requires: pip install reportlab
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+import io
+
+BRAND_BLUE  = colors.HexColor("#185FA5")
+BRAND_LIGHT = colors.HexColor("#E6F1FB")
+BRAND_GRAY  = colors.HexColor("#7A7974")
+ROW_ALT     = colors.HexColor("#F9F8F5")
+RED         = colors.HexColor("#A32D2D")
+GREEN       = colors.HexColor("#1D9E75")
+
+def generate_payslip(emp, slip, year, month, month_name, company_name="Your Company Pvt. Ltd."):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=15*mm, rightMargin=15*mm,
+        topMargin=12*mm, bottomMargin=12*mm
+    )
+    styles = getSampleStyleSheet()
+
+    def style(name, **kw):
+        return ParagraphStyle(name, parent=styles["Normal"], **kw)
+
+    S = {
+        "company":  style("co",   fontSize=14, textColor=BRAND_BLUE,  fontName="Helvetica-Bold"),
+        "slip_hdr": style("sh",   fontSize=10, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_CENTER),
+        "label":    style("lbl",  fontSize=8,  textColor=BRAND_GRAY),
+        "value":    style("val",  fontSize=9,  fontName="Helvetica-Bold"),
+        "rvalue":   style("rval", fontSize=9,  fontName="Helvetica-Bold", alignment=TA_RIGHT),
+        "small":    style("sm",   fontSize=7,  textColor=BRAND_GRAY),
+        "footer":   style("ft",   fontSize=7,  textColor=BRAND_GRAY,  alignment=TA_CENTER),
+    }
+
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    period = f"{month_name} {year}"
+
+    story = []
+
+    # ── Header ──────────────────────────────────────────────────────────────
+    header_data = [[
+        Paragraph(company_name, S["company"]),
+        Paragraph(f"SALARY SLIP — {period}", S["slip_hdr"]),
+    ]]
+    header_tbl = Table(header_data, colWidths=[95*mm, 85*mm])
+    header_tbl.setStyle(TableStyle([
+        ("BACKGROUND",  (1,0),(1,0), BRAND_BLUE),
+        ("VALIGN",      (0,0),(-1,-1), "MIDDLE"),
+        ("TOPPADDING",  (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 6),
+        ("LEFTPADDING", (0,0),(-1,-1), 4),
+        ("RIGHTPADDING",(0,0),(-1,-1), 4),
+    ]))
+    story.append(header_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    # ── Employee Details ────────────────────────────────────────────────────
+    def cell(label, value):
+        return [Paragraph(label, S["label"]), Paragraph(str(value), S["value"])]
+
+    details = [
+        cell("Employee Name",  emp["name"]) + cell("Department",   emp["dept"]),
+        cell("Designation",    emp["role"]) + cell("Joining Date",  emp["join_date"]),
+        cell("PAN",            emp["pan"])  + cell("Working Days",  str(slip.get("worked_days","—"))),
+    ]
+    det_tbl = Table(details, colWidths=[28*mm, 62*mm, 28*mm, 62*mm])
+    det_tbl.setStyle(TableStyle([
+        ("BOX",         (0,0),(-1,-1), 0.5, BRAND_GRAY),
+        ("INNERGRID",   (0,0),(-1,-1), 0.25, colors.HexColor("#D5D3CB")),
+        ("BACKGROUND",  (0,0),(0,-1), ROW_ALT),
+        ("BACKGROUND",  (2,0),(2,-1), ROW_ALT),
+        ("TOPPADDING",  (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+        ("LEFTPADDING", (0,0),(-1,-1), 4),
+    ]))
+    story.append(det_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    # ── Earnings & Deductions ───────────────────────────────────────────────
+    def money(n):
+        return f"₹ {n:,.0f}"
+
+    earn_rows = [
+        [Paragraph("EARNINGS", S["slip_hdr"]), "", Paragraph("DEDUCTIONS", S["slip_hdr"]), ""],
+        ["Basic Salary",         money(slip["basic"]),   "Provident Fund",      money(slip["pf"])   if emp["pf"]  else "N/A"],
+        ["House Rent Allowance", money(slip["hra"]),     "ESI",                 money(slip["esi"])  if emp["esi"] else "N/A"],
+        ["Special Allowance",    money(slip["special"]), "Professional Tax",    money(slip["pt"])],
+        ["",                     "",                     "TDS (Est.)",          money(slip["tds"])],
+    ]
+
+    col_w = [50*mm, 30*mm, 50*mm, 30*mm]
+    ed_tbl = Table(earn_rows, colWidths=col_w)
+    ed_tbl.setStyle(TableStyle([
+        # Header row
+        ("BACKGROUND",    (0,0),(1,0), BRAND_BLUE),
+        ("BACKGROUND",    (2,0),(3,0), colors.HexColor("#0C447C")),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("SPAN",          (0,0),(0,0)),
+        ("SPAN",          (2,0),(3,0)),
+        ("ALIGN",         (0,0),(-1,0), "CENTER"),
+        # Data rows
+        ("ALIGN",         (1,1),(1,-1), "RIGHT"),
+        ("ALIGN",         (3,1),(3,-1), "RIGHT"),
+        ("FONTNAME",      (1,1),(1,-1), "Helvetica"),
+        ("FONTNAME",      (3,1),(3,-1), "Helvetica"),
+        ("FONTSIZE",      (0,0),(-1,-1), 8.5),
+        ("BOX",           (0,0),(-1,-1), 0.5, BRAND_GRAY),
+        ("INNERGRID",     (0,0),(-1,-1), 0.25, colors.HexColor("#D5D3CB")),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, ROW_ALT]),
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+        ("LEFTPADDING",   (0,0),(-1,-1), 4),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 4),
+    ]))
+    story.append(ed_tbl)
+    story.append(Spacer(1, 3*mm))
+
+    # ── Totals bar ──────────────────────────────────────────────────────────
+    totals = [[
+        Paragraph("Gross Salary", S["label"]),
+        Paragraph(money(slip["gross"]), S["rvalue"]),
+        Paragraph("Total Deductions", S["label"]),
+        Paragraph(money(slip["total_ded"]), ParagraphStyle("rd", parent=S["rvalue"], textColor=RED)),
+        Paragraph("NET PAY", ParagraphStyle("np", parent=S["label"], textColor=BRAND_BLUE, fontName="Helvetica-Bold")),
+        Paragraph(money(slip["net"]), ParagraphStyle("nv", parent=S["rvalue"], textColor=BRAND_BLUE, fontSize=11)),
+    ]]
+    tot_tbl = Table(totals, colWidths=[35*mm, 25*mm, 38*mm, 25*mm, 25*mm, 32*mm])
+    tot_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,-1), BRAND_LIGHT),
+        ("BOX",           (0,0),(-1,-1), 0.5, BRAND_BLUE),
+        ("LINEAFTER",     (1,0),(4,0), 0.5, BRAND_BLUE),
+        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0),(-1,-1), 6),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+        ("LEFTPADDING",   (0,0),(-1,-1), 5),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 5),
+    ]))
+    story.append(tot_tbl)
+    story.append(Spacer(1, 6*mm))
+
+    # ── Statutory note ──────────────────────────────────────────────────────
+    story.append(Paragraph(
+        "PF calculated at 12% of basic (capped at ₹15,000). ESI at 0.75% (applicable ≤ ₹21,000 gross). "
+        "TDS is an estimate; consult your CA for exact liability. PT as per Maharashtra schedule.",
+        S["small"]
+    ))
+    story.append(Spacer(1, 8*mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_GRAY))
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph(
+        "This is a computer-generated payslip and does not require a signature. "
+        f"Generated for {period}.",
+        S["footer"]
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+[FILE] modules\projects.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required, current_user
+from .db import get_conn
+import hashlib
+
+projects_bp = Blueprint("projects", __name__)
+
+def gen_id(name):
+    return "P" + str(int(hashlib.md5(name.encode()).hexdigest(), 16) % 900 + 100)
+
+def _all_employees(conn):
+    return conn.execute("SELECT id, name FROM employees WHERE status='active' ORDER BY name").fetchall()
+
+
+# ── Index ─────────────────────────────────────────────────────────────────────
+
+@login_required
+@projects_bp.route("/")
+def index():
+    conn   = get_conn()
+    status = request.args.get("status", "")
+    sql    = "SELECT * FROM projects"
+    params = []
+    if status:
+        sql += " WHERE status=?"; params.append(status)
+    projects  = conn.execute(sql, params).fetchall()
+    employees = _all_employees(conn)   # needed for Add Project lead/members dropdowns
+    conn.close()
+    return render_template("projects.html", projects=projects,
+                           employees=employees, status=status)
+
+
+# ── Add project ───────────────────────────────────────────────────────────────
+
+@login_required
+@projects_bp.route("/add", methods=["POST"])
+def add():
+    f        = request.form
+    errors   = {}
+    name     = f.get("name",        "").strip()
+    client   = f.get("client",      "").strip()
+    start    = f.get("start_date",  "").strip()
+    end      = f.get("end_date",    "").strip()
+    budget   = f.get("budget",      "").strip()
+    lead     = f.get("lead",        "").strip()
+    ptype    = f.get("type",        "")
+    billing  = f.get("billing_type","Fixed price")
+    status   = f.get("status",      "active")
+    members  = request.form.getlist("members")   # user-selected, may be empty
+    ms_names = request.form.getlist("ms_name")
+    ms_dates = request.form.getlist("ms_date")
+
+    if not name:   errors["name"]   = "Project name required"
+    if not client: errors["client"] = "Client required"
+    if not start:  errors["start"]  = "Start date required"
+    if not end:    errors["end"]    = "End date required"
+    elif start and end < start: errors["end"] = "End must be after start"
+    if not budget or not budget.replace(".", "").isdigit():
+        errors["budget"] = "Valid budget required"
+    if not lead:   errors["lead"]   = "Project lead required"
+
+    if errors:
+        flash("Please fix the errors below.", "error")
+        conn      = get_conn()
+        projects  = conn.execute("SELECT * FROM projects").fetchall()
+        employees = _all_employees(conn)
+        conn.close()
+        return render_template("projects.html",
+            projects=projects, employees=employees,
+            errors=errors, form=f, show_form=True, status="")
+
+    pid  = gen_id(name)
+    conn = get_conn()
+    conn.execute("""
+        INSERT OR IGNORE INTO projects
+            (id,name,client,type,status,start_date,end_date,budget,lead,billing_type)
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (pid, name, client, ptype, status, start, end, float(budget), lead, billing))
+
+    # Only insert explicitly chosen members — no automatic population
+    for emp_id in members:
+        conn.execute(
+            "INSERT OR IGNORE INTO project_members(project_id,employee_id) VALUES(?,?)",
+            (pid, emp_id)
+        )
+
+    for ms_name, ms_date in zip(ms_names, ms_dates):
+        if ms_name.strip():
+            conn.execute(
+                "INSERT INTO milestones(project_id,name,due_date) VALUES(?,?,?)",
+                (pid, ms_name.strip(), ms_date)
+            )
+
+    conn.commit()
+    conn.close()
+    flash(f"Project '{name}' created (ID: {pid}).", "success")
+    return redirect(url_for("projects.detail", pid=pid))
+
+
+# ── Members ───────────────────────────────────────────────────────────────────
+
+@login_required
+@projects_bp.route("/detail/<pid>/members/add", methods=["POST"])
+def member_add(pid):
+    emp_id = request.form.get("employee_id")
+    if emp_id:
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR IGNORE INTO project_members(project_id,employee_id) VALUES(?,?)",
+            (pid, emp_id)
+        )
+        conn.commit(); conn.close()
+        flash("Member added.", "success")
+    return redirect(url_for("projects.detail", pid=pid))
+
+
+@login_required
+@projects_bp.route("/detail/<pid>/members/remove", methods=["POST"])
+def member_remove(pid):
+    emp_id = request.form.get("employee_id")
+    if emp_id:
+        conn = get_conn()
+        conn.execute(
+            "DELETE FROM project_members WHERE project_id=? AND employee_id=?",
+            (pid, emp_id)
+        )
+        conn.commit(); conn.close()
+        flash("Member removed.", "info")
+    return redirect(url_for("projects.detail", pid=pid))
+
+
+# ── Activities ────────────────────────────────────────────────────────────────
+
+@login_required
+@projects_bp.route("/detail/<pid>/activities/add", methods=["POST"])
+def activity_add(pid):
+    name = request.form.get("activity_name", "").strip()
+    if not name:
+        flash("Activity name is required.", "error")
+        return redirect(url_for("projects.detail", pid=pid))
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO project_activities(project_id, name) VALUES(?,?)", (pid, name)
+    )
+    conn.commit(); conn.close()
+    flash(f"Activity '{name}' added.", "success")
+    return redirect(url_for("projects.detail", pid=pid))
+
+
+@login_required
+@projects_bp.route("/detail/<pid>/activities/delete", methods=["POST"])
+def activity_delete(pid):
+    act_id = request.form.get("activity_id")
+    conn   = get_conn()
+    conn.execute(
+        "DELETE FROM project_activities WHERE id=? AND project_id=?", (act_id, pid)
+    )
+    conn.commit(); conn.close()
+    flash("Activity removed.", "info")
+    return redirect(url_for("projects.detail", pid=pid))
+
+
+# ── API: activities for a project (used by timesheet JS dropdown) ─────────────
+
+@projects_bp.route("/api/<pid>/activities")
+@login_required
+def api_activities(pid):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, name FROM project_activities WHERE project_id=? ORDER BY name",
+        (pid,)
+    ).fetchall()
+    conn.close()
+    return jsonify([{"id": r["id"], "name": r["name"]} for r in rows])
+
+
+# ── Detail ────────────────────────────────────────────────────────────────────
+
+@login_required
+@projects_bp.route("/detail/<pid>")
+def detail(pid):
+    conn       = get_conn()
+    project    = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    milestones = conn.execute(
+        "SELECT * FROM milestones WHERE project_id=?", (pid,)
+    ).fetchall()
+    members    = conn.execute("""
+        SELECT e.* FROM employees e
+        JOIN project_members pm ON pm.employee_id=e.id
+        WHERE pm.project_id=?
+    """, (pid,)).fetchall()
+    activities = conn.execute(
+        "SELECT * FROM project_activities WHERE project_id=? ORDER BY name", (pid,)
+    ).fetchall()
+    timesheets = conn.execute("""
+        SELECT t.*, e.name as emp_name,
+               COALESCE(pa.name, '-') as activity_name
+        FROM timesheets t
+        JOIN employees e ON e.id=t.employee_id
+        LEFT JOIN project_activities pa ON pa.id=t.activity_id
+        WHERE t.project_id=? ORDER BY t.work_date DESC
+    """, (pid,)).fetchall()
+    # Employees not yet in this project (for the Add Member dropdown)
+    member_ids  = [m["id"] for m in members]
+    non_members = [e for e in _all_employees(conn) if e["id"] not in member_ids]
+    conn.close()
+    return render_template("project_detail.html",
+        project=project, milestones=milestones,
+        members=members, non_members=non_members,
+        activities=activities, timesheets=timesheets)
+
+[FILE] modules\reports.py
+
+from flask import Blueprint, render_template, request, send_file
+from flask_login import login_required, current_user
+from .db import get_conn
+from .salary import calc_salary
+from datetime import date
+import io
+
+reports_bp = Blueprint("reports", __name__)
+MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+@reports_bp.route("/")
+@login_required
+def index():
+    today = date.today()
+    return render_template("reports.html", year=today.year, month=today.month, months=MONTHS)
+
+@reports_bp.route("/attendance")
+@login_required
+def attendance():
+    year  = int(request.args.get("year",  date.today().year))
+    month = int(request.args.get("month", date.today().month))
+    conn  = get_conn()
+    rows  = conn.execute("""
+        SELECT e.name, e.dept,
+               COUNT(DISTINCT a.punch_date) as days_present,
+               SUM(CASE WHEN time(a.punch_in) > time('09:30') THEN 1 ELSE 0 END) as late_count,
+               ROUND(SUM(
+                 CASE WHEN a.punch_out IS NOT NULL
+                 THEN (strftime('%H',a.punch_out)*60 + strftime('%M',a.punch_out) -
+                       strftime('%H',a.punch_in)*60  - strftime('%M',a.punch_in)) / 60.0
+                 ELSE 0 END
+               ),1) as total_hours
+        FROM employees e
+        LEFT JOIN attendance a ON a.employee_id=e.id
+            AND strftime('%Y',a.punch_date)=? AND strftime('%m',a.punch_date)=?
+        WHERE e.status='active'
+        GROUP BY e.id ORDER BY e.name
+    """, (str(year), f"{month:02d}")).fetchall()
+    conn.close()
+    return render_template("reports.html", report="attendance", rows=rows,
+                           year=year, month=month, months=MONTHS,
+                           month_name=MONTHS[month-1])
+
+@reports_bp.route("/payroll")
+@login_required
+def payroll():
+    if current_user.role not in ("admin","hr"):
+        from flask import abort; abort(403)
+    year  = int(request.args.get("year",  date.today().year))
+    month = int(request.args.get("month", date.today().month))
+    conn  = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    rows = [(emp, calc_salary(emp, year, month)) for emp in employees]
+    total_gross = sum(r[1]["gross"] for r in rows)
+    total_net   = sum(r[1]["net"]   for r in rows)
+    total_ded   = sum(r[1]["total_ded"] for r in rows)
+    return render_template("reports.html", report="payroll", rows=rows,
+                           year=year, month=month, months=MONTHS,
+                           month_name=MONTHS[month-1],
+                           total_gross=total_gross, total_net=total_net, total_ded=total_ded)
+
+@reports_bp.route("/compliance")
+@login_required
+def compliance():
+    if current_user.role not in ("admin","hr"):
+        from flask import abort; abort(403)
+    year  = int(request.args.get("year",  date.today().year))
+    month = int(request.args.get("month", date.today().month))
+    conn  = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active' AND pf=1").fetchall()
+    conn.close()
+    rows = []
+    for emp in employees:
+        slip = calc_salary(emp, year, month)
+        rows.append({
+            "name": emp["name"], "dept": emp["dept"],
+            "gross": slip["gross"], "basic": slip["basic"],
+            "pf_emp": slip["pf"], "pf_er": round(min(slip["basic"],15000)*0.12),
+            "esi_emp": slip["esi"] if emp["esi"] else 0,
+            "esi_er":  round(slip["gross"]*0.0325) if emp["esi"] else 0,
+            "pt": slip["pt"], "tds": slip["tds"],
+        })
+    return render_template("reports.html", report="compliance", rows=rows,
+                           year=year, month=month, months=MONTHS,
+                           month_name=MONTHS[month-1])
+
+@reports_bp.route("/timesheet-summary")
+@login_required
+def timesheet_summary():
+    year  = int(request.args.get("year",  date.today().year))
+    month = int(request.args.get("month", date.today().month))
+    conn  = get_conn()
+    rows  = conn.execute("""
+        SELECT e.name, e.dept, p.name as proj_name,
+               SUM(t.hours) as total_hours, COUNT(*) as entries
+        FROM timesheets t
+        JOIN employees e ON e.id=t.employee_id
+        JOIN projects  p ON p.id=t.project_id
+        WHERE strftime('%Y',t.work_date)=? AND strftime('%m',t.work_date)=?
+        GROUP BY e.id, p.id ORDER BY e.name, p.name
+    """, (str(year), f"{month:02d}")).fetchall()
+    conn.close()
+    return render_template("reports.html", report="timesheet_summary", rows=rows,
+                           year=year, month=month, months=MONTHS,
+                           month_name=MONTHS[month-1])
+
+@reports_bp.route("/export/payroll-excel")
+@login_required
+def export_payroll_excel():
+    if current_user.role not in ("admin","hr"):
+        from flask import abort; abort(403)
+    from .excel_payroll import generate_payroll_register
+    year  = int(request.args.get("year",  date.today().year))
+    month = int(request.args.get("month", date.today().month))
+    conn  = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    buf  = generate_payroll_register(employees, calc_salary, year, month, MONTHS[month-1])
+    fname = f"Payroll_Register_{MONTHS[month-1]}{year}.xlsx"
+    return send_file(buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name=fname)
+
+[FILE] modules\salary.py
+
+from flask import Blueprint, render_template, request
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date
+
+salary_bp = Blueprint("salary", __name__)
+
+def calc_salary(emp, year, month):
+    gross  = emp["salary"]
+    basic  = round(gross * 0.50)
+    hra    = round(gross * 0.20)
+    special = gross - basic - hra
+
+    pf  = round(min(basic, 15000) * 0.12) if emp["pf"]  else 0
+    esi = round(gross * 0.0075)            if emp["esi"] else 0
+    pt  = 200  # Professional Tax (Maharashtra flat rate)
+
+    annual_taxable = (gross - pf - esi) * 12
+    tds = round(max(0, annual_taxable - 250000) * 0.10 / 12)
+
+    total_ded = pf + esi + pt + tds
+    net       = gross - total_ded
+
+    # Attendance-adjusted working days
+    conn = get_conn()
+    att = conn.execute("""
+        SELECT COUNT(*) as days FROM attendance
+        WHERE employee_id=? AND strftime('%Y',punch_date)=? AND strftime('%m',punch_date)=?
+    """, (emp["id"], str(year), f"{month:02d}")).fetchone()
+    conn.close()
+    worked_days = att["days"] if att else "—"
+
+    return dict(
+        gross=gross, basic=basic, hra=hra, special=special,
+        pf=pf, esi=esi, pt=pt, tds=tds,
+        total_ded=total_ded, net=net, worked_days=worked_days
+    )
+
+@login_required
+@salary_bp.route("/")
+def index():
+    today  = date.today()
+    year   = int(request.args.get("year",  today.year))
+    month  = int(request.args.get("month", today.month))
+    emp_id = request.args.get("emp_id")
+
+    conn      = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    conn.close()
+
+    selected = None
+    slip     = None
+    if emp_id:
+        conn     = get_conn()
+        selected = conn.execute("SELECT * FROM employees WHERE id=?", (emp_id,)).fetchone()
+        conn.close()
+        if selected:
+            slip = calc_salary(selected, year, month)
+
+    return render_template("salary.html",
+        employees=employees, selected=selected,
+        slip=slip, year=year, month=month,
+        months=["Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec"])
+
+@salary_bp.route("/pdf")
+@login_required
+def pdf():
+    from flask import send_file, abort
+    from .pdf_payslip import generate_payslip
+    emp_id = request.args.get("emp_id")
+    year   = int(request.args.get("year",  date.today().year))
+    month  = int(request.args.get("month", date.today().month))
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+    if not emp_id:
+        abort(400, "emp_id required")
+
+    conn = get_conn()
+    emp  = conn.execute("SELECT * FROM employees WHERE id=?", (emp_id,)).fetchone()
+    conn.close()
+    if not emp:
+        abort(404, "Employee not found")
+
+    slip = calc_salary(emp, year, month)
+    buf  = generate_payslip(emp, slip, year, month, MONTHS[month-1])
+    filename = f"Payslip_{emp['name'].replace(' ','_')}_{MONTHS[month-1]}{year}.pdf"
+    return send_file(buf, mimetype="application/pdf",
+                     as_attachment=True, download_name=filename)
+
+@salary_bp.route("/export/excel")
+@login_required
+def export_excel():
+    from flask import send_file
+    from .excel_payroll import generate_payroll_register
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    year   = int(request.args.get("year",  date.today().year))
+    month  = int(request.args.get("month", date.today().month))
+
+    conn      = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    conn.close()
+
+    buf      = generate_payroll_register(employees, calc_salary, year, month, MONTHS[month-1])
+    filename = f"Payroll_Register_{MONTHS[month-1]}{year}.xlsx"
+    return send_file(buf,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name=filename)
+
+@salary_bp.route("/email/config", methods=["POST"])
+@login_required
+def save_smtp():
+    from .auth import roles_required
+    if current_user.role not in ("admin", "hr"):
+        flash("Only HR/Admin can configure email settings.", "error")
+        return redirect(url_for("salary.index"))
+    f = request.form
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO smtp_config(id, sender, password)
+        VALUES(1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET sender=excluded.sender, password=excluded.password
+    """, (f.get("sender","").strip(), f.get("password","").strip()))
+    conn.commit()
+    conn.close()
+    flash("SMTP settings saved.", "success")
+    return redirect(url_for("salary.index", emp_id=f.get("emp_id"),
+                            year=f.get("year"), month=f.get("month")))
+
+@salary_bp.route("/email/send", methods=["POST"])
+@login_required
+def send_email():
+    from .pdf_payslip import generate_payslip
+    from .email_dispatch import send_payslip_email
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    f      = request.form
+    emp_id = f.get("emp_id")
+    year   = int(f.get("year",  date.today().year))
+    month  = int(f.get("month", date.today().month))
+    to_email = f.get("to_email","").strip()
+
+    conn = get_conn()
+    emp  = conn.execute("SELECT * FROM employees WHERE id=?", (emp_id,)).fetchone()
+    cfg  = conn.execute("SELECT * FROM smtp_config WHERE id=1").fetchone()
+    conn.close()
+
+    if not emp:
+        flash("Employee not found.", "error")
+        return redirect(url_for("salary.index"))
+    if not cfg or not cfg["sender"] or not cfg["password"]:
+        flash("SMTP not configured. Please save email settings first.", "error")
+        return redirect(url_for("salary.index", emp_id=emp_id, year=year, month=month))
+    if not to_email:
+        flash("Recipient email is required.", "error")
+        return redirect(url_for("salary.index", emp_id=emp_id, year=year, month=month))
+
+    slip     = calc_salary(emp, year, month)
+    mn       = MONTHS[month-1]
+    pdf_buf  = generate_payslip(emp, slip, year, month, mn)
+    filename = f"Payslip_{emp['name'].replace(' ','_')}_{mn}{year}.pdf"
+
+    try:
+        send_payslip_email(cfg["sender"], cfg["password"],
+                           to_email, emp["name"], mn, year, pdf_buf, filename)
+        flash(f"Payslip emailed to {to_email}.", "success")
+    except Exception as e:
+        flash(f"Email failed: {e}", "error")
+
+    return redirect(url_for("salary.index", emp_id=emp_id, year=year, month=month))
+
+@salary_bp.route("/run-payroll", methods=["POST"])
+@login_required
+def run_payroll():
+    from flask_login import current_user as cu
+    if cu.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("salary.index"))
+    MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    year  = int(request.form.get("year",  date.today().year))
+    month = int(request.form.get("month", date.today().month))
+    conn  = get_conn()
+    employees = conn.execute("SELECT * FROM employees WHERE status='active'").fetchall()
+    count = 0
+    for emp in employees:
+        slip = calc_salary(emp, year, month)
+        conn.execute("""
+            INSERT INTO payslip_history(employee_id,year,month,gross,net,generated_by)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(employee_id,year,month) DO UPDATE SET
+              gross=excluded.gross, net=excluded.net,
+              generated_on=date('now'), generated_by=excluded.generated_by
+        """, (emp["id"], year, month, slip["gross"], slip["net"], cu.full_name))
+        count += 1
+    conn.commit(); conn.close()
+    flash(f"Payroll run complete — {count} payslips recorded for {MONTHS[month-1]} {year}.", "success")
+    return redirect(url_for("salary.index"))
+
+@salary_bp.route("/history")
+@login_required
+def history():
+    conn = get_conn()
+    emp_id = request.args.get("emp_id")
+    rows = conn.execute("""
+        SELECT ph.*, e.name as emp_name FROM payslip_history ph
+        JOIN employees e ON e.id=ph.employee_id
+        WHERE 1=1 """ + (" AND ph.employee_id=?" if emp_id else "") + """
+        ORDER BY ph.year DESC, ph.month DESC, e.name
+    """, (emp_id,) if emp_id else ()).fetchall()
+    employees = conn.execute("SELECT id,name FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    return render_template("payslip_history.html", rows=rows,
+                           employees=employees, emp_id=emp_id)
+
+[FILE] modules\tasks.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required, current_user
+from .db import get_conn
+
+tasks_bp = Blueprint("tasks", __name__)
+
+@tasks_bp.route("/")
+@login_required
+def index():
+    conn = get_conn()
+    proj_filter = request.args.get("project", "")
+    is_manager  = current_user.role in ("admin", "hr")
+
+    sql = """
+        SELECT t.*, p.name as proj_name, e.name as assignee_name
+        FROM tasks t
+        JOIN projects p ON p.id = t.project_id
+        LEFT JOIN employees e ON e.id = t.assigned_to
+        WHERE 1=1
+    """
+    params = []
+    if not is_manager and current_user.employee_id:
+        sql += " AND t.assigned_to=?"; params.append(current_user.employee_id)
+    if proj_filter:
+        sql += " AND t.project_id=?"; params.append(proj_filter)
+    sql += " ORDER BY t.due_date, p.name"
+    tasks    = conn.execute(sql, params).fetchall()
+    projects = conn.execute("SELECT id,name FROM projects WHERE status='active'").fetchall()
+    employees= conn.execute("SELECT id,name FROM employees WHERE status='active'").fetchall()
+    conn.close()
+    return render_template("tasks.html", tasks=tasks, projects=projects,
+                           employees=employees, proj_filter=proj_filter,
+                           is_manager=is_manager)
+
+@tasks_bp.route("/add", methods=["POST"])
+@login_required
+def add():
+    f = request.form
+    proj = f.get("project_id","").strip()
+    title= f.get("title","").strip()
+    if not proj or not title:
+        flash("Project and title are required.", "error")
+        return redirect(url_for("tasks.index"))
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO tasks(project_id, title, assigned_to, due_date, status)
+        VALUES(?,?,?,?,?)
+    """, (proj, title, f.get("assigned_to") or None,
+          f.get("due_date") or None, f.get("status","open")))
+    conn.commit(); conn.close()
+    flash(f"Task '{title}' created.", "success")
+    return redirect(url_for("tasks.index"))
+
+@tasks_bp.route("/status/<int:tid>", methods=["POST"])
+@login_required
+def update_status(tid):
+    new_status = request.form.get("status","open")
+    conn = get_conn()
+    conn.execute("UPDATE tasks SET status=? WHERE id=?", (new_status, tid))
+    conn.commit(); conn.close()
+    flash("Task updated.", "success")
+    return redirect(url_for("tasks.index"))
+
+@tasks_bp.route("/delete/<int:tid>", methods=["POST"])
+@login_required
+def delete(tid):
+    if current_user.role not in ("admin","hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("tasks.index"))
+    conn = get_conn()
+    conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    conn.commit(); conn.close()
+    flash("Task deleted.", "info")
+    return redirect(url_for("tasks.index"))
+
+[FILE] modules\timesheet.py
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required, current_user
+from .db import get_conn
+from datetime import date, timedelta
+
+timesheet_bp = Blueprint("timesheet", __name__)
+
+def week_range(offset=0):
+    today  = date.today()
+    monday = today - timedelta(days=today.weekday()) + timedelta(weeks=offset)
+    return monday, monday + timedelta(days=6)
+
+@login_required
+@timesheet_bp.route("/")
+def index():
+    offset     = int(request.args.get("week", 0))
+    emp_filter = request.args.get("emp", "")
+    start, end = week_range(offset)
+
+    conn       = get_conn()
+    is_manager = current_user.role in ("admin", "hr")
+
+    if is_manager:
+        employees = conn.execute(
+            "SELECT id, name FROM employees WHERE status='active'"
+        ).fetchall()
+        projects  = conn.execute(
+            "SELECT id, name FROM projects WHERE status='active'"
+        ).fetchall()
+        tasks = []
+    else:
+        employees = conn.execute(
+            "SELECT id, name FROM employees WHERE id=? AND status='active'",
+            (current_user.employee_id,)
+        ).fetchall()
+        projects = conn.execute("""
+            SELECT DISTINCT p.id, p.name FROM projects p
+            JOIN tasks t ON t.project_id=p.id
+            WHERE t.assigned_to=? AND p.status='active'
+        """, (current_user.employee_id,)).fetchall()
+        tasks = conn.execute("""
+            SELECT id, title, project_id FROM tasks
+            WHERE assigned_to=? AND status != 'done'
+        """, (current_user.employee_id,)).fetchall()
+
+    # Pre-load activities for all visible projects so the template can
+    # pass them to the JS without extra fetches on first render
+    project_ids  = [p["id"] for p in projects]
+    activities_map = {}   # { project_id: [{id, name}, ...] }
+    if project_ids:
+        placeholders = ",".join("?" * len(project_ids))
+        rows = conn.execute(
+            f"SELECT id, name, project_id FROM project_activities WHERE project_id IN ({placeholders}) ORDER BY name",
+            project_ids
+        ).fetchall()
+        for r in rows:
+            activities_map.setdefault(r["project_id"], []).append(
+                {"id": r["id"], "name": r["name"]}
+            )
+
+    sql    = """
+        SELECT t.*, e.name as emp_name, p.name as proj_name,
+               COALESCE(pa.name, '') as activity_name
+        FROM timesheets t
+        JOIN employees e ON e.id=t.employee_id
+        JOIN projects  p ON p.id=t.project_id
+        LEFT JOIN project_activities pa ON pa.id=t.activity_id
+        WHERE t.work_date BETWEEN ? AND ?
+    """
+    params = [str(start), str(end)]
+
+    if not is_manager:
+        sql += " AND t.employee_id=?"; params.append(current_user.employee_id)
+    elif emp_filter:
+        sql += " AND t.employee_id=?"; params.append(emp_filter)
+
+    sql += " ORDER BY t.work_date, e.name"
+    entries = conn.execute(sql, params).fetchall()
+    conn.close()
+
+    grid = {}
+    for e in entries:
+        eid = e["employee_id"]
+        d   = date.fromisoformat(e["work_date"])
+        day = (d - start).days
+        grid.setdefault(eid, {}).setdefault(day, 0)
+        grid[eid][day] += e["hours"]
+
+    days = [(start + timedelta(days=i)).strftime("%a %d") for i in range(7)]
+    return render_template("timesheet.html",
+        employees=employees, projects=projects, tasks=tasks,
+        entries=entries, grid=grid, days=days,
+        week_start=start, week_end=end,
+        offset=offset, emp_filter=emp_filter,
+        is_manager=is_manager,
+        my_emp_id=current_user.employee_id,
+        activities_map=activities_map)
+
+
+@login_required
+@timesheet_bp.route("/add", methods=["POST"])
+def add():
+    f           = request.form
+    emp_id      = f.get("employee_id")
+    proj_id     = f.get("project_id")
+    activity_id = f.get("activity_id") or None   # optional
+    wdate       = f.get("work_date")
+    hours       = f.get("hours")
+    notes       = f.get("notes", "").strip()
+    offset      = f.get("offset", 0)
+
+    if not all([emp_id, proj_id, wdate, hours]):
+        flash("Employee, project, date and hours are required.", "error")
+    else:
+        conn = get_conn()
+        conn.execute("""
+            INSERT INTO timesheets
+                (employee_id, project_id, activity_id, work_date, hours, notes)
+            VALUES(?,?,?,?,?,?)
+        """, (emp_id, proj_id, activity_id, wdate, float(hours), notes))
+        conn.commit()
+        conn.close()
+        flash("Entry logged.", "success")
+
+    return redirect(url_for("timesheet.index", week=offset))
+
+
+@login_required
+@timesheet_bp.route("/delete/<int:tid>", methods=["POST"])
+def delete(tid):
+    conn = get_conn()
+    conn.execute("DELETE FROM timesheets WHERE id=?", (tid,))
+    conn.commit(); conn.close()
+    flash("Entry removed.", "info")
+    return redirect(url_for("timesheet.index"))
+
+
+@timesheet_bp.route("/submit/<int:tid>", methods=["POST"])
+@login_required
+def submit(tid):
+    conn = get_conn()
+    conn.execute("UPDATE timesheets SET status='submitted' WHERE id=?", (tid,))
+    conn.commit(); conn.close()
+    flash("Timesheet submitted for approval.", "success")
+    return redirect(url_for("timesheet.index"))
+
+
+@timesheet_bp.route("/approve/<int:tid>", methods=["POST"])
+@login_required
+def approve(tid):
+    if current_user.role not in ("admin", "hr"):
+        flash("Not authorised.", "error")
+        return redirect(url_for("timesheet.index"))
+    action = request.form.get("action", "approve")
+    status = "approved" if action == "approve" else "rejected"
+    conn   = get_conn()
+    conn.execute("UPDATE timesheets SET status=? WHERE id=?", (status, tid))
+    conn.commit(); conn.close()
+    flash(f"Timesheet {status}.", "success")
+    return redirect(url_for("timesheet.index"))
+
+[FILE] modules\__init__.py
+
+
+
+[FILE] templates\base.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniERP — {{ title | default("") }}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F5F4F0;--bg2:#fff;--bg3:#FAFAF8;
+  --border:#E5E3DC;--border2:#D5D3CB;
+  --text:#1A1916;--text2:#7A7974;--text3:#A8A5A0;
+  --nav-hover:#F5F4F0;--nav-active:#F0F4FB;
+  --row-hover:#FAFAF8;--row-alt:#F5F4F0;
+  --input-bg:#fff;
+}
+body.dark{
+  --bg:#1A1917;--bg2:#242220;--bg3:#2C2A28;
+  --border:#3A3835;--border2:#4A4845;
+  --text:#E8E6E3;--text2:#9A9894;--text3:#6A6865;
+  --nav-hover:#2C2A28;--nav-active:#1E2D3D;
+  --row-hover:#2C2A28;--row-alt:#272523;
+  --input-bg:#2C2A28;
+}
+body{font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;display:flex;height:100vh;overflow:hidden}
+a{color:inherit;text-decoration:none}
+/* Sidebar */
+.sidebar{width:200px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;height:100vh}
+.logo{padding:16px;font-weight:600;font-size:15px;border-bottom:1px solid #E5E3DC}
+.logo span{font-size:11px;font-weight:400;color:var(--text2);display:block}
+.nav-section{font-size:10px;font-weight:600;color:var(--text3);padding:12px 14px 4px;letter-spacing:.6px;text-transform:uppercase}
+.nav a{display:flex;align-items:center;gap:8px;padding:8px 14px;color:var(--text2);font-size:13px;border-left:2px solid transparent}
+.nav a:hover{background:var(--nav-hover);color:var(--text)}
+.nav a.active{background:var(--nav-active);color:#185FA5;font-weight:500;border-left-color:#185FA5}
+.sidebar-footer{padding:12px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);margin-top:auto}
+.sync-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#A8A5A0;margin-right:4px}
+/* Main */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{padding:12px 20px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.topbar h1{font-size:16px;font-weight:500}
+.content{flex:1;overflow-y:auto;padding:20px}
+/* Cards */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px}
+.card-title{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px;text-transform:uppercase;letter-spacing:.4px}
+/* Metrics */
+.metric-grid{display:grid;gap:10px;margin-bottom:16px}
+.metric-grid.cols-4{grid-template-columns:repeat(4,1fr)}
+.metric-grid.cols-3{grid-template-columns:repeat(3,1fr)}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
+.metric-val{font-size:22px;font-weight:600}
+.metric-lbl{font-size:11px;color:var(--text2);margin-top:2px}
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--row-hover)}
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:500}
+.badge-green{background:#EAF3DE;color:#3B6D11}
+.badge-blue{background:#E6F1FB;color:#185FA5}
+.badge-amber{background:#FAEEDA;color:#854F0B}
+.badge-red{background:#FCEBEB;color:#A32D2D}
+.badge-gray{background:#F1EFE8;color:#5F5E5A}
+/* Buttons */
+.btn{padding:6px 14px;border-radius:6px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:500;border:1px solid #D5D3CB;background:#fff;color:#1A1916;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:#F5F4F0}
+.btn-primary{background:#185FA5;color:#fff;border-color:#185FA5}
+.btn-primary:hover{background:#0C447C}
+.btn-danger{background:#FCEBEB;color:#A32D2D;border-color:#F5C6C6}
+.btn-sm{padding:4px 10px;font-size:12px}
+/* Forms */
+input,select,textarea{padding:6px 10px;border:1px solid var(--border2);border-radius:6px;font-family:inherit;font-size:13px;background:var(--input-bg);color:var(--text);outline:none;width:100%}
+input:focus,select:focus,textarea:focus{border-color:#185FA5;box-shadow:0 0 0 2px #E6F1FB}
+input.err,select.err{border-color:#E24B4A}
+.field-err{font-size:11px;color:#A32D2D;margin-top:3px}
+label{font-size:12px;color:#7A7974;display:block;margin-bottom:4px}
+.form-grid{display:grid;gap:12px}
+.form-grid.cols-2{grid-template-columns:1fr 1fr}
+.form-field{margin-bottom:4px}
+.span-2{grid-column:1/-1}
+/* Flash */
+.flash{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.flash-success{background:#EAF3DE;border:1px solid #9FE1CB;color:#3B6D11}
+.flash-error{background:#FCEBEB;border:1px solid #F5C6C6;color:#A32D2D}
+.flash-info{background:#E6F1FB;border:1px solid #B5D4F4;color:#185FA5}
+/* Progress */
+.progress-bar{height:6px;background:#E5E3DC;border-radius:3px;overflow:hidden;margin:4px 0}
+.progress-fill{height:100%;border-radius:3px;background:#185FA5}
+/* Avatar */
+.avatar{width:28px;height:28px;border-radius:50%;background:#E6F1FB;color:#185FA5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+/* Grid helpers */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.flex{display:flex;gap:8px;align-items:center}
+.ml-auto{margin-left:auto}
+/* Section modal-style form inside card */
+.section-heading{font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin:16px 0 10px}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <div class="logo">MiniERP <span>v1.0 · 30 Users</span></div>
+  <nav class="nav">
+    <a href="/dashboard" class="{{ 'active' if active=='dashboard' }}">🏠 Dashboard</a>
+    <div class="nav-section">People</div>
+    <a href="/hr"        class="{{ 'active' if active=='hr' }}">👤 HR</a>
+    <a href="/biometric" class="{{ 'active' if active=='biometric' }}">🖐 Biometric</a>
+    {% if current_user.can('leave') %}
+    <a href="/leave"     class="{{ 'active' if active=='leave' }}">🌴 Leave</a>
+    {% endif %}
+    <div class="nav-section">Work</div>
+    {% if current_user.can('projects') %}
+    <a href="/projects"  class="{{ 'active' if active=='projects' }}">📋 Projects</a>
+    {% endif %}
+    {% if current_user.can('timesheet') %}
+    <a href="/timesheet" class="{{ 'active' if active=='timesheet' }}">⏱ Timesheets</a>
+    {% endif %}
+    {% if current_user.can('tasks') or current_user.is_hr %}
+    <a href="/tasks" class="{{ 'active' if active=='tasks' }}">✅ Tasks</a>
+    {% endif %}
+    <div class="nav-section">Finance</div>
+    <a href="/salary"    class="{{ 'active' if active=='salary' }}">💰 Salary</a>
+    <a href="/reports"   class="{{ 'active' if active=='reports' }}">📊 Reports</a>
+    {% if current_user.is_hr %}
+    <a href="/holidays"  class="{{ 'active' if active=='holidays' }}">📅 Holidays</a>
+    <a href="/salary/history" class="{{ 'active' if active=='payslip_history' }}">🧾 Payslip History</a>
+    {% endif %}
+    {% if current_user.is_authenticated and current_user.is_admin %}
+    <div class="nav-section">Admin</div>
+    <a href="/users"     class="{{ 'active' if active=='users' }}">🔐 Users</a>
+    {% endif %}
+  </nav>
+  <div class="sidebar-footer">
+    <!-- ESSL device status — updated live by pollEsslStatus() -->
+    <div id="essl-status" style="line-height:1.5">
+      <span id="essl-dot" class="sync-dot" style="background:#A8A5A0"></span>
+      <span id="essl-label" style="font-size:11px;color:var(--text2)">Checking…</span><br>
+      <span id="essl-addr" style="font-size:10px;color:var(--text3)"></span>
+    </div>
+    {% if current_user.is_authenticated %}
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--text);font-weight:500">{{ current_user.full_name }}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">
+        <span style="background:#E6F1FB;color:#185FA5;padding:1px 6px;border-radius:10px;font-size:10px">{{ current_user.role }}</span>
+      </div>
+      <a href="/logout" style="font-size:11px;color:#A32D2D">Sign out →</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="main">
+  <div class="topbar">
+    <h1>{{ title | default("ERP") }}</h1>
+    <div class="flex">
+      <span style="font-size:12px;color:#7A7974" id="clock"></span>
+      {% if current_user.is_authenticated %}
+      <span style="font-size:12px;color:#7A7974">|</span>
+      <span style="font-size:12px;font-weight:500">{{ current_user.full_name }}</span>
+      <span class="badge {{ 'badge-red' if current_user.role=='admin' else 'badge-blue' if current_user.role=='hr' else 'badge-gray' }}">{{ current_user.role }}</span>
+      <a href="/logout" class="btn btn-sm" style="font-size:12px">Logout</a>
+      {% endif %}
+      <button id="theme-toggle" class="btn btn-sm" onclick="toggleDark()" title="Toggle dark mode" style="font-size:15px;padding:4px 8px">🌙</button>
+    </div>
+  </div>
+  <div class="content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}
+        <div class="flash flash-{{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </div>
+</div>
+<script>
+function tick(){document.getElementById("clock").textContent=new Date().toLocaleTimeString("en-IN")}
+tick(); setInterval(tick,1000);
+// Dark mode — persists via localStorage
+function toggleDark(){
+  const dark = document.body.classList.toggle("dark");
+  localStorage.setItem("erp_dark", dark ? "1" : "0");
+  document.getElementById("theme-toggle").textContent = dark ? "☀️" : "🌙";
+}
+(function(){
+  const d = localStorage.getItem("erp_dark");
+  if(d === "1"){ document.body.classList.add("dark"); document.getElementById("theme-toggle").textContent="☀️"; }
+})();
+
+// ── ESSL live status ─────────────────────────────────────────────────────────
+(function(){
+  const dot   = document.getElementById("essl-dot");
+  const label = document.getElementById("essl-label");
+  const addr  = document.getElementById("essl-addr");
+
+  function pollEsslStatus(){
+    fetch("/biometric/status")
+      .then(r => {
+        if (!r.ok || !r.headers.get("content-type")?.includes("application/json"))
+          return Promise.reject("not-json:" + r.status);
+        return r.json();
+      })
+      .then(data => {
+        const ok = data.connected;
+        dot.style.background  = ok ? "#1D9E75" : "#E24B4A";
+        label.textContent     = ok ? "ESSL Connected" : "ESSL Offline";
+        label.style.color     = ok ? "var(--text2)" : "#A32D2D";
+        addr.textContent      = `${data.ip}:${data.port}`;
+      })
+      .catch(() => {
+        dot.style.background  = "#A8A5A0";
+        label.textContent     = "Status unknown";
+        label.style.color     = "var(--text3)";
+        addr.textContent      = "";
+      });
+  }
+
+  pollEsslStatus();                   // immediate on page load
+  setInterval(pollEsslStatus, 30000); // then every 30 s
+})();
+</script>
+</body>
+</html>
+
+[FILE] templates\biometric.html
+
+{% extends "base.html" %}
+{% set active = "biometric" %}
+{% block content %}
+
+<div class="grid-2">
+  <!-- ESSL Sync -->
+  <div class="card">
+    <div class="card-title">ESSL Device Sync</div>
+    <div style="font-size:13px;margin-bottom:12px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;display:inline-block"></span>
+        Device connected
+      </div>
+      <div style="color:#7A7974;font-size:12px">Uses <code>pyzk</code> library over TCP port 4370.</div>
+    </div>
+    <form method="POST" action="/biometric/sync">
+      <div class="form-grid cols-2" style="margin-bottom:10px">
+        <div class="form-field">
+          <label>Device IP</label>
+          <input name="ip" value="192.168.1.100" placeholder="192.168.1.x">
+        </div>
+        <div class="form-field">
+          <label>Port</label>
+          <input name="port" value="4370" type="number">
+        </div>
+      </div>
+      <button class="btn btn-primary" type="submit">🔄 Pull from Device</button>
+    </form>
+  </div>
+
+  <!-- Manual Punch -->
+  <div class="card">
+    <div class="card-title">Manual Punch Entry</div>
+    <form method="POST" action="/biometric/manual">
+      <div class="form-grid cols-2">
+        <div class="form-field span-2">
+          <label>Employee *</label>
+          <select name="employee_id">
+            <option value="">Select…</option>
+            {% for e in employees %}
+            <option value="{{ e.id }}">{{ e.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Date *</label>
+          <input type="date" name="punch_date" value="{{ today }}">
+        </div>
+        <div class="form-field">
+          <label>Punch In *</label>
+          <input type="time" name="punch_in">
+        </div>
+        <div class="form-field span-2">
+          <label>Punch Out (optional)</label>
+          <input type="time" name="punch_out">
+        </div>
+        <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" type="submit">Save Punch</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Today's Log -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+    <span class="card-title" style="margin:0">Today's Attendance — {{ today }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Punch In</th><th>Punch Out</th><th>Hours</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for r in records %}
+    {% set hrs = ((r.punch_out|replace(':','.')|float - r.punch_in|replace(':','.')|float) if r.punch_out else none) %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ r.emp_name[:2] }}</div>{{ r.emp_name }}</div></td>
+      <td><code>{{ r.punch_in }}</code></td>
+      <td><code>{{ r.punch_out or '—' }}</code></td>
+      <td>
+        {% if r.punch_in and r.punch_out %}
+          {% set h_in  = r.punch_in.split(':')  %}
+          {% set h_out = r.punch_out.split(':') %}
+          {% set mins = (h_out[0]|int * 60 + h_out[1]|int) - (h_in[0]|int * 60 + h_in[1]|int) %}
+          <span class="badge {{ 'badge-amber' if mins > 540 else 'badge-green' }}">{{ (mins // 60)|string + 'h ' + (mins % 60)|string + 'm' }}</span>
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="badge {{ 'badge-blue' if r.source=='essl' else 'badge-gray' }}">{{ r.source }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;padding:20px;color:#7A7974">No punches recorded today. Sync device or add manually.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\dashboard.html
+
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block content %}
+
+<div class="metric-grid cols-4" style="margin-bottom:16px">
+  <div class="metric"><div class="metric-val">{{ total_emp }}</div><div class="metric-lbl">Active Employees</div></div>
+  <div class="metric"><div class="metric-val" style="color:#1D9E75">{{ present }}</div><div class="metric-lbl">Present Today</div></div>
+  <div class="metric"><div class="metric-val" style="color:#185FA5">{{ active_proj }}</div><div class="metric-lbl">Active Projects</div></div>
+  <div class="metric"><div class="metric-val">₹{{ "{:,.0f}".format(payroll) }}</div><div class="metric-lbl">Monthly Payroll</div></div>
+  <div class="metric"><div class="metric-val" style="color:#EF9F27">{{ open_leaves }}</div><div class="metric-lbl">Pending Leaves</div></div>
+  <div class="metric"><div class="metric-val" style="color:#A32D2D">{{ open_tasks }}</div><div class="metric-lbl">Open Tasks</div></div>
+</div>
+
+<div class="grid-2">
+  {% if my_tasks %}
+  <div class="card">
+    <div class="card-title">My Open Tasks</div>
+    {% for t in my_tasks %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <div>
+        <div style="font-weight:500">{{ t.title }}</div>
+        <div style="font-size:11px;color:var(--text2)">{{ t.proj_name }}</div>
+      </div>
+      <div style="text-align:right">
+        <span class="badge {{ 'badge-blue' if t.status=='in-progress' else 'badge-amber' }}">{{ t.status }}</span>
+        {% if t.due_date %}<div style="font-size:11px;color:var(--text2);margin-top:2px">Due {{ t.due_date }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    <a href="/tasks" class="btn btn-sm" style="margin-top:10px">View all →</a>
+  </div>
+  {% endif %}
+
+  {% if current_user.is_hr and recent_leaves %}
+  <div class="card">
+    <div class="card-title">Pending Leave Requests</div>
+    {% for r in recent_leaves %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <div>
+        <div style="font-weight:500">{{ r.emp_name }}</div>
+        <div style="font-size:11px;color:var(--text2)">{{ r.leave_name }} · {{ r.days|int }}d · {{ r.from_date }}</div>
+      </div>
+      <a href="/leave" class="btn btn-sm">Review →</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if projects %}
+  <div class="card">
+    <div class="card-title">Project Budget Burn</div>
+    {% for p in projects %}
+    {% set pct = [p.spent/p.budget*100, 100]|min|round|int %}
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">
+        <span style="font-weight:500">{{ p.name }}</span>
+        <span style="color:{{ '#A32D2D' if pct>80 else 'var(--text2)' }}">{{ pct }}%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:{{ pct }}%;background:{{ '#E24B4A' if pct>80 else '#185FA5' }}"></div></div>
+    </div>
+    {% endfor %}
+    <a href="/projects" class="btn btn-sm">All projects →</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+[FILE] templates\holidays.html
+
+{% extends "base.html" %}
+{% set active = "holidays" %}
+{% block content %}
+
+{% if current_user.is_hr %}
+<div class="card">
+  <div class="card-title">Add Holiday</div>
+  <form method="POST" action="/holidays/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Holiday Name *</label>
+        <input name="name" placeholder="e.g. Diwali">
+      </div>
+      <div class="form-field">
+        <label>Date *</label>
+        <input type="date" name="date">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Add Holiday</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/holidays" style="display:flex;gap:6px">
+    <select name="year" onchange="this.form.submit()">
+      {% for y in range(2023,2027) %}
+      <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>Holiday</th><th>Date</th><th>Day</th>{% if current_user.is_hr %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for h in holidays %}
+    <tr>
+      <td style="font-weight:500">{{ h.name }}</td>
+      <td>{{ h.date }}</td>
+      <td style="color:var(--text2)">{{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][h.date | datetimeformat('%w') | int - 1] if h.date else '—' }}</td>
+      {% if current_user.is_hr %}
+      <td>
+        <form method="POST" action="/holidays/delete/{{ h.id }}">
+          <button class="btn btn-sm btn-danger" type="submit">✕</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text2)">No holidays added for {{ year }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\hr.html
+
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+
+<!-- Add Employee Form -->
+<div class="card">
+  <div class="card-title">Add New Employee</div>
+  <form method="POST" action="/hr/add">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2">
+        <label>Full Name *</label>
+        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Rahul Mehta">
+        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Department *</label>
+        <select name="dept" class="{{ 'err' if errors and errors.dept }}">
+          <option value="">Select…</option>
+          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
+          <option {{ 'selected' if form and form.dept==d }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.dept %}<div class="field-err">{{ errors.dept }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Role / Designation *</label>
+        <input name="role" value="{{ form.role if form else '' }}" class="{{ 'err' if errors and errors.role }}" placeholder="e.g. Process Engineer">
+        {% if errors and errors.role %}<div class="field-err">{{ errors.role }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Joining Date *</label>
+        <input type="date" name="join_date" value="{{ form.join_date if form else '' }}" class="{{ 'err' if errors and errors.join }}">
+        {% if errors and errors.join %}<div class="field-err">{{ errors.join }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Monthly Gross Salary (₹) *</label>
+        <input type="number" name="salary" value="{{ form.salary if form else '' }}" class="{{ 'err' if errors and errors.salary }}" placeholder="e.g. 55000" min="0">
+        {% if errors and errors.salary %}<div class="field-err">{{ errors.salary }}</div>{% endif %}
+      </div>
+      <div class="form-field span-2">
+        <label>PAN Number *</label>
+        <input name="pan" value="{{ form.pan if form else '' }}" class="{{ 'err' if errors and errors.pan }}" placeholder="ABCDE1234F" maxlength="10" style="text-transform:uppercase">
+        {% if errors and errors.pan %}<div class="field-err">{{ errors.pan }}</div>{% endif %}
+      </div>
+      <div class="form-field flex" style="align-items:center;gap:20px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="pf" style="width:auto" checked> PF (12% of basic)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="esi" style="width:auto"> ESI (0.75%, ≤₹21k)
+        </label>
+      </div>
+      <div class="form-field" style="display:flex;align-items:flex-end">
+        <button class="btn btn-primary" type="submit">Add Employee</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Employee List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC;display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Employees ({{ employees|length }})</span>
+    <div class="ml-auto flex">
+      <form method="GET" action="/hr" style="display:flex;gap:6px">
+        <input name="q" value="{{ q }}" placeholder="Search…" style="width:150px">
+        <select name="dept" onchange="this.form.submit()">
+          <option value="">All Depts</option>
+          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
+          <option {{ 'selected' if dept==d }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+        <button class="btn btn-sm" type="submit">Search</button>
+      </form>
+      {% if show_all %}
+      <a href="/hr" class="btn btn-sm">Hide Inactive</a>
+      {% else %}
+      <a href="/hr?show_all=1" class="btn btn-sm" style="color:#7A7974">Show Inactive</a>
+      {% endif %}
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Joining</th><th>Salary</th><th>Benefits</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for e in employees %}
+    <tr>
+      <td>
+        <div class="flex">
+          <div class="avatar">{{ e.name[:2] }}</div>
+          <div><div style="font-weight:500">{{ e.name }}</div><div style="font-size:11px;color:#7A7974">{{ e.pan }}</div></div>
+        </div>
+      </td>
+      <td>{{ e.dept }}</td>
+      <td>{{ e.role }}</td>
+      <td>{{ e.join_date }}</td>
+      <td>₹{{ "{:,.0f}".format(e.salary) }}</td>
+      <td>
+        {% if e.pf %}<span class="badge badge-green">PF</span>{% endif %}
+        {% if e.esi %}<span class="badge badge-blue">ESI</span>{% endif %}
+      </td>
+      <td><span class="badge {{ 'badge-green' if e.status=='active' else 'badge-gray' if e.status=='inactive' else 'badge-amber' }}">{{ e.status }}</span></td>
+      <td>
+        <div class="flex">
+          <a href="/salary?emp_id={{ e.id }}" class="btn btn-sm">Payslip</a>
+          <a href="/hr/edit/{{ e.id }}" class="btn btn-sm">Edit</a>
+          <a href="/hr/{{ e.id }}/documents" class="btn btn-sm" style="background:#F0F4FB;color:#185FA5">📎 Docs</a>
+          <form method="POST" action="/hr/delete/{{ e.id }}" onsubmit="return confirm('Deactivate {{ e.name }}? Their history will be preserved.')">
+            <button class="btn btn-sm btn-danger" type="submit" {{ 'disabled' if e.status=='inactive' }}>
+              {{ '✕ Deactivate' if e.status=='active' else 'Inactive' }}
+            </button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" style="text-align:center;padding:20px;color:#7A7974">No employees found.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\hr_edit.html
+
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+<div class="card" style="max-width:560px">
+  <div class="card-title">Edit Employee — {{ emp.name }}</div>
+  <form method="POST">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2"><label>Full Name</label><input name="name" value="{{ emp.name }}" required></div>
+      <div class="form-field"><label>Department</label>
+        <select name="dept">{% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}<option {{ 'selected' if emp.dept==d }}>{{ d }}</option>{% endfor %}</select>
+      </div>
+      <div class="form-field"><label>Role / Designation</label><input name="role" value="{{ emp.role }}"></div>
+      <div class="form-field"><label>Joining Date</label><input type="date" name="join_date" value="{{ emp.join_date }}"></div>
+      <div class="form-field"><label>Gross Salary (₹)</label><input type="number" name="salary" value="{{ emp.salary }}"></div>
+      <div class="form-field"><label>Status</label>
+        <select name="status"><option {{ 'selected' if emp.status=='active' }}>active</option><option {{ 'selected' if emp.status=='on-leave' }}>on-leave</option><option {{ 'selected' if emp.status=='inactive' }}>inactive</option></select>
+      </div>
+      <div class="form-field flex" style="align-items:center;gap:20px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="pf" style="width:auto" {{ 'checked' if emp.pf }}> PF</label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="esi" style="width:auto" {{ 'checked' if emp.esi }}> ESI</label>
+      </div>
+      <div class="form-field span-2" style="display:flex;gap:8px;justify-content:flex-end">
+        <a href="/hr" class="btn">Cancel</a>
+        <button class="btn btn-primary" type="submit">Save Changes</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+[FILE] templates\leave.html
+
+{% extends "base.html" %}
+{% set active = "leave" %}
+{% block content %}
+
+<!-- Apply Form -->
+<div class="card">
+  <div class="card-title">Apply for Leave</div>
+  <form method="POST" action="/leave/apply">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Employee *</label>
+        <select name="employee_id" required>
+          <option value="">Select…</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Leave Type *</label>
+        <select name="leave_type_id" required>
+          <option value="">Select…</option>
+          {% for lt in leave_types %}
+          <option value="{{ lt.id }}">{{ lt.name }} ({{ lt.days }}d/yr) {% if not lt.paid %}— Unpaid{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>From Date *</label>
+        <input type="date" name="from_date" required min="{{ today }}">
+      </div>
+      <div class="form-field">
+        <label>To Date *</label>
+        <input type="date" name="to_date" required min="{{ today }}">
+      </div>
+      <div class="form-field span-2">
+        <label>Reason</label>
+        <input name="reason" placeholder="Brief reason (optional)">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Submit Application</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Leave Balances -->
+<details class="card">
+  <summary style="cursor:pointer;font-weight:500;font-size:13px;list-style:none">
+    📊 Leave Balances — {{ year }}
+    <a href="/leave?year={{ year-1 }}" class="btn btn-sm" style="margin-left:8px">← {{ year-1 }}</a>
+    <a href="/leave?year={{ year+1 }}" class="btn btn-sm">{{ year+1 }} →</a>
+  </summary>
+  <div style="margin-top:12px;overflow-x:auto">
+  <table>
+    <thead><tr><th>Employee</th><th>Leave Type</th><th>Allocated</th><th>Used</th><th>Remaining</th></tr></thead>
+    <tbody>
+    {% for b in balances %}
+    {% set remaining = b.allocated - b.used %}
+    <tr>
+      <td>{{ b.emp_name }}</td>
+      <td>{{ b.leave_name }}</td>
+      <td>{{ b.allocated|int }}</td>
+      <td>{{ b.used|int }}</td>
+      <td>
+        <span class="badge {{ 'badge-green' if remaining > 5 else 'badge-amber' if remaining > 0 else 'badge-red' }}">
+          {{ remaining|int }} days
+        </span>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;color:#7A7974;padding:16px">No balance data for {{ year }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+
+<!-- Requests List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC;display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Leave Requests</span>
+    <div class="ml-auto">
+      <form method="GET" action="/leave" style="display:flex;gap:6px">
+        <select name="emp" onchange="this.form.submit()">
+          <option value="">All Employees</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}" {{ 'selected' if emp_filter==e.id|string }}>{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="status" onchange="this.form.submit()">
+          <option value="">All Status</option>
+          {% for s in ["pending","approved","rejected","cancelled"] %}
+          <option value="{{ s }}" {{ 'selected' if status_filter==s }}>{{ s|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th>Status</th><th>Applied</th>
+      {% if current_user.role in ('admin','hr') %}<th>Actions</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in requests %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ r.emp_name[:2] }}</div>{{ r.emp_name }}</div></td>
+      <td>
+        {{ r.leave_name }}
+        {% if not r.paid %}<span class="badge badge-amber" style="margin-left:4px">Unpaid</span>{% endif %}
+      </td>
+      <td>{{ r.from_date }}</td>
+      <td>{{ r.to_date }}</td>
+      <td><span class="badge badge-blue">{{ r.days|int }}d</span></td>
+      <td style="color:#7A7974;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.reason }}">{{ r.reason or '—' }}</td>
+      <td>
+        <span class="badge {{ 'badge-amber' if r.status=='pending' else 'badge-green' if r.status=='approved' else 'badge-red' if r.status=='rejected' else 'badge-gray' }}">
+          {{ r.status }}
+        </span>
+        {% if r.remarks %}<div style="font-size:11px;color:#7A7974;margin-top:2px">{{ r.remarks }}</div>{% endif %}
+      </td>
+      <td style="font-size:12px;color:#7A7974">{{ r.applied_on }}</td>
+      {% if current_user.role in ('admin','hr') %}
+      <td>
+        <div class="flex">
+          {% if r.status == 'pending' %}
+          <form method="POST" action="/leave/review/{{ r.id }}" style="display:flex;gap:4px;align-items:center">
+            <input name="remarks" placeholder="Remarks" style="width:90px;font-size:12px;padding:3px 6px">
+            <button name="action" value="approve" class="btn btn-sm btn-primary">✓</button>
+            <button name="action" value="reject"  class="btn btn-sm btn-danger">✕</button>
+          </form>
+          {% elif r.status == 'approved' %}
+          <form method="POST" action="/leave/cancel/{{ r.id }}">
+            <button class="btn btn-sm" type="submit" onclick="return confirm('Cancel this approved leave?')">Cancel</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="9" style="text-align:center;padding:20px;color:#7A7974">No leave requests found.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\login.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MiniERP — Login</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Segoe UI,system-ui,sans-serif;background:#F5F4F0;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#fff;border:1px solid #E5E3DC;border-radius:12px;padding:32px;width:340px}
+.logo{font-size:20px;font-weight:700;margin-bottom:4px}
+.logo span{font-size:12px;font-weight:400;color:#7A7974;display:block;margin-bottom:24px}
+label{font-size:12px;color:#7A7974;display:block;margin-bottom:4px}
+input{width:100%;padding:8px 10px;border:1px solid #D5D3CB;border-radius:6px;font-size:14px;outline:none;margin-bottom:14px}
+input:focus{border-color:#185FA5;box-shadow:0 0 0 2px #E6F1FB}
+.btn{width:100%;padding:9px;background:#185FA5;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer}
+.btn:hover{background:#0C447C}
+.flash{padding:9px 12px;border-radius:6px;font-size:13px;margin-bottom:14px}
+.flash-error{background:#FCEBEB;border:1px solid #F5C6C6;color:#A32D2D}
+.flash-info{background:#E6F1FB;border:1px solid #B5D4F4;color:#185FA5}
+.remember{display:flex;align-items:center;gap:6px;font-size:13px;color:#5A5854;margin-bottom:16px}
+.remember input{width:auto;margin:0}
+.hint{margin-top:16px;font-size:11px;color:#A8A5A0;border-top:1px solid #E5E3DC;padding-top:12px}
+.hint b{color:#5A5854}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">MiniERP <span>Company ERP · Please sign in</span></div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="POST" action="/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" placeholder="e.g. admin" autofocus required>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" placeholder="••••••••" required>
+
+    <label class="remember">
+      <input type="checkbox" name="remember"> Keep me signed in
+    </label>
+
+    <button class="btn" type="submit">Sign In</button>
+  </form>
+
+  <div class="hint">
+    <b>Default accounts:</b><br>
+    admin / admin123 &nbsp;·&nbsp; hr / hr123 &nbsp;·&nbsp; viewer / viewer123<br>
+    <span style="color:#E24B4A">Change these after first login.</span>
+  </div>
+</div>
+</body>
+</html>
+
+[FILE] templates\payslip_history.html
+
+{% extends "base.html" %}
+{% set active = "salary" %}
+{% block content %}
+<div class="card">
+  <div class="card-title">Run Payroll (All Employees)</div>
+  <form method="POST" action="/salary/run-payroll" style="display:flex;gap:8px;align-items:flex-end">
+    <div class="form-field" style="margin:0">
+      <label>Month</label>
+      <select name="month">{% for i in range(1,13) %}<option value="{{ i }}">{{ ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i-1] }}</option>{% endfor %}</select>
+    </div>
+    <div class="form-field" style="margin:0">
+      <label>Year</label>
+      <select name="year">{% for y in range(2023,2027) %}<option value="{{ y }}">{{ y }}</option>{% endfor %}</select>
+    </div>
+    <button class="btn btn-primary" type="submit" onclick="return confirm('Run payroll for all active employees?')">▶ Run Payroll</button>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
+    <span class="card-title" style="margin:0">Payslip History</span>
+    <div class="ml-auto">
+      <form method="GET" action="/salary/history" style="display:flex;gap:6px">
+        <select name="emp_id" onchange="this.form.submit()">
+          <option value="">All Employees</option>
+          {% for e in employees %}<option value="{{ e.id }}" {{ 'selected' if emp_id==e.id|string }}>{{ e.name }}</option>{% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Month</th><th>Year</th><th>Gross</th><th>Net Pay</th><th>Generated On</th><th>By</th><th></th></tr></thead>
+    <tbody>
+    {% set MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] %}
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.emp_name }}</td>
+      <td>{{ MONTHS[r.month-1] }}</td>
+      <td>{{ r.year }}</td>
+      <td>₹{{ "{:,.0f}".format(r.gross) }}</td>
+      <td style="color:#185FA5;font-weight:500">₹{{ "{:,.0f}".format(r.net) }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ r.generated_on }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ r.generated_by }}</td>
+      <td><a href="/salary/pdf?emp_id={{ r.employee_id }}&year={{ r.year }}&month={{ r.month }}" class="btn btn-sm" target="_blank">⬇ PDF</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text2)">No payroll runs yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\projects.html
+
+{% extends "base.html" %}
+{% set active = "projects" %}
+{% block content %}
+
+<!-- Add Project Form -->
+<details class="card" {{ 'open' if show_form }}>
+  <summary style="cursor:pointer;font-weight:500;font-size:13px;list-style:none">
+    ＋ New Project
+  </summary>
+  <div style="margin-top:14px">
+  <form method="POST" action="/projects/add">
+    <div class="form-grid cols-2">
+      <div class="form-field span-2">
+        <label>Project Name *</label>
+        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Flare System Redesign">
+        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Client *</label>
+        <input name="client" value="{{ form.client if form else '' }}" class="{{ 'err' if errors and errors.client }}" placeholder="e.g. PetroChem Ltd">
+        {% if errors and errors.client %}<div class="field-err">{{ errors.client }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Project Type</label>
+        <select name="type">
+          {% for t in ["","FEED","Detailed Engineering","HAZOP / Safety","Inspection","Commissioning","Consulting"] %}
+          <option value="{{ t }}" {{ 'selected' if form and form.type==t }}>{{ t or 'Select type…' }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Start Date *</label>
+        <input type="date" name="start_date" value="{{ form.start_date if form else '' }}" class="{{ 'err' if errors and errors.start }}">
+        {% if errors and errors.start %}<div class="field-err">{{ errors.start }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>End Date *</label>
+        <input type="date" name="end_date" value="{{ form.end_date if form else '' }}" class="{{ 'err' if errors and errors.end }}">
+        {% if errors and errors.end %}<div class="field-err">{{ errors.end }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Budget (₹) *</label>
+        <input type="number" name="budget" value="{{ form.budget if form else '' }}" class="{{ 'err' if errors and errors.budget }}" placeholder="e.g. 2500000" min="0">
+        {% if errors and errors.budget %}<div class="field-err">{{ errors.budget }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Billing Type</label>
+        <select name="billing_type">
+          {% for b in ["Fixed price","Time & material","Retainer"] %}
+          <option>{{ b }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Project Lead *</label>
+        <select name="lead" class="{{ 'err' if errors and errors.lead }}">
+          <option value="">Select lead…</option>
+          {% for e in employees %}
+          <option value="{{ e.name }}" {{ 'selected' if form and form.lead==e.name }}>{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.lead %}<div class="field-err">{{ errors.lead }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Status</label>
+        <select name="status">
+          {% for s in ["active","planned","on-hold"] %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field span-2">
+        <label>Team Members</label>
+        <select name="members" multiple style="height:90px">
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        <div style="font-size:11px;color:#7A7974;margin-top:3px">Hold Ctrl / Cmd to select multiple</div>
+      </div>
+
+      <!-- Milestones -->
+      <div class="form-field span-2">
+        <div class="section-heading">Milestones (optional)</div>
+        <div id="milestones"></div>
+        <button type="button" class="btn btn-sm" onclick="addMs()">＋ Add milestone</button>
+      </div>
+
+      <div class="form-field span-2" style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="reset" class="btn">Reset</button>
+        <button type="submit" class="btn btn-primary">Create Project</button>
+      </div>
+    </div>
+  </form>
+  </div>
+</details>
+
+<!-- Projects List -->
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/projects" style="display:flex;gap:6px">
+    <select name="status" onchange="this.form.submit()">
+      <option value="" {{ 'selected' if not status }}>All Status</option>
+      {% for s in ["active","on-hold","planned","completed"] %}
+      <option value="{{ s }}" {{ 'selected' if status==s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% for p in projects %}
+<div class="card">
+  <div class="flex" style="margin-bottom:8px">
+    <a href="/projects/detail/{{ p.id }}" style="font-weight:600;font-size:15px">{{ p.name }}</a>
+    <span class="badge {{ 'badge-green' if p.status=='active' else 'badge-amber' if p.status=='on-hold' else 'badge-blue' if p.status=='completed' else 'badge-gray' }}">{{ p.status }}</span>
+    <span style="font-size:11px;color:#7A7974">{{ p.id }}</span>
+    <span class="ml-auto" style="font-size:12px;color:#7A7974">{{ p.start_date }} → {{ p.end_date }}</span>
+  </div>
+  <div style="font-size:12px;color:#7A7974;margin-bottom:10px">{{ p.client }} · Lead: {{ p.lead }} · {{ p.type or '' }}</div>
+  <div class="metric-grid cols-3" style="margin-bottom:8px">
+    <div class="metric"><div class="metric-val" style="font-size:16px">₹{{ "{:,.0f}".format(p.budget) }}</div><div class="metric-lbl">Budget</div></div>
+    <div class="metric"><div class="metric-val" style="font-size:16px">₹{{ "{:,.0f}".format(p.spent) }}</div><div class="metric-lbl">Spent</div></div>
+    <div class="metric"><div class="metric-val" style="font-size:16px;color:{{ '#A32D2D' if p.budget and (p.spent/p.budget)>0.8 else '#1D9E75' }}">{{ "{:.0f}".format(p.spent/p.budget*100) if p.budget else 0 }}%</div><div class="metric-lbl">Burn</div></div>
+  </div>
+  {% if p.budget %}
+  <div class="progress-bar"><div class="progress-fill" style="width:{{ [p.spent/p.budget*100,100]|min }}%;background:{{ '#E24B4A' if (p.spent/p.budget)>0.8 else '#185FA5' }}"></div></div>
+  {% endif %}
+  <div class="flex" style="margin-top:8px">
+    <a href="/projects/detail/{{ p.id }}" class="btn btn-sm">View detail →</a>
+  </div>
+</div>
+{% else %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">No projects yet. Add one above.</div>
+{% endfor %}
+
+<script>
+let mc=0;
+function addMs(){
+  mc++;
+  const row=document.createElement("div");
+  row.style="display:grid;grid-template-columns:1fr 140px 28px;gap:6px;margin-bottom:6px";
+  row.innerHTML=`<input name="ms_name" placeholder="Milestone name"><input type="date" name="ms_date"><button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:#7A7974">×</button>`;
+  document.getElementById("milestones").appendChild(row);
+}
+</script>
+{% endblock %}
+
+[FILE] templates\project_detail.html
+
+{% extends "base.html" %}
+{% set active = "projects" %}
+{% block content %}
+<div class="flex" style="margin-bottom:14px">
+  <a href="/projects" class="btn btn-sm">← Back</a>
+  <h2 style="font-size:16px;font-weight:600">{{ project.name }}</h2>
+  <span class="badge {{ 'badge-green' if project.status=='active' else 'badge-amber' }}">{{ project.status }}</span>
+  <span style="font-size:12px;color:#7A7974" class="ml-auto">{{ project.id }}</span>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Details</div>
+    {% for label, val in [
+      ("Client", project.client), ("Type", project.type or "—"),
+      ("Lead", project.lead), ("Billing", project.billing_type),
+      ("Start", project.start_date), ("End", project.end_date)
+    ] %}
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span><span>{{ val }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <div class="card-title">Budget</div>
+    <div style="font-size:24px;font-weight:700;margin-bottom:4px">₹{{ "{:,.0f}".format(project.budget) }}</div>
+    <div style="font-size:13px;color:#7A7974;margin-bottom:10px">₹{{ "{:,.0f}".format(project.spent) }} spent</div>
+    {% if project.budget %}
+    {% set pct = (project.spent / project.budget * 100)|round %}
+    <div class="progress-bar" style="height:10px"><div class="progress-fill" style="width:{{ [pct,100]|min }}%;background:{{ '#E24B4A' if pct>80 else '#185FA5' }}"></div></div>
+    <div style="font-size:12px;color:#7A7974;margin-top:4px">{{ pct }}% consumed</div>
+    {% endif %}
+
+    <div class="card-title" style="margin-top:14px">Team</div>
+    <div class="flex" style="flex-wrap:wrap">
+    {% for m in members %}
+      <div class="flex" style="background:#F5F4F0;padding:4px 10px;border-radius:20px;font-size:12px">
+        <div class="avatar" style="width:22px;height:22px;font-size:10px">{{ m.name[:2] }}</div>{{ m.name }}
+      </div>
+    {% else %}<span style="color:#7A7974;font-size:13px">No members assigned.</span>{% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Milestones -->
+<div class="card">
+  <div class="card-title">Milestones</div>
+  {% if milestones %}
+  <table>
+    <thead><tr><th>Milestone</th><th>Due Date</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for m in milestones %}
+    <tr>
+      <td>{{ m.name }}</td>
+      <td>{{ m.due_date or '—' }}</td>
+      <td><span class="badge {{ 'badge-green' if m.done else 'badge-amber' }}">{{ 'Done' if m.done else 'Pending' }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="color:#7A7974;font-size:13px">No milestones defined.</div>
+  {% endif %}
+</div>
+
+<!-- Timesheets -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC"><span class="card-title" style="margin:0">Logged Hours</span></div>
+  <table>
+    <thead><tr><th>Employee</th><th>Date</th><th>Hours</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for t in timesheets %}
+    <tr>
+      <td>{{ t.emp_name }}</td>
+      <td>{{ t.work_date }}</td>
+      <td><span class="badge badge-blue">{{ t.hours }}h</span></td>
+      <td style="color:#7A7974">{{ t.notes or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="text-align:center;padding:20px;color:#7A7974">No hours logged yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\reports.html
+
+{% extends "base.html" %}
+{% set active = "reports" %}
+{% block content %}
+
+<!-- Selector -->
+<div class="card">
+  <div class="flex" style="gap:16px;flex-wrap:wrap">
+    <a href="/reports/attendance?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='attendance' }}">📅 Attendance</a>
+    {% if current_user.is_hr %}
+    <a href="/reports/payroll?year={{ year }}&month={{ month }}"    class="btn {{ 'btn-primary' if report=='payroll' }}">💰 Payroll Summary</a>
+    <a href="/reports/compliance?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='compliance' }}">📋 PF/ESI Register</a>
+    {% endif %}
+    <a href="/reports/timesheet-summary?year={{ year }}&month={{ month }}" class="btn {{ 'btn-primary' if report=='timesheet_summary' }}">⏱ Timesheet Summary</a>
+    <div class="ml-auto">
+      <form method="GET" action="{{ request.path }}" style="display:flex;gap:6px">
+        <select name="month" onchange="this.form.submit()">
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if month==i }}>{{ months[i-1] }}</option>
+          {% endfor %}
+        </select>
+        <select name="year" onchange="this.form.submit()">
+          {% for y in range(2023,2027) %}
+          <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Attendance Report -->
+{% if report == 'attendance' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span class="card-title" style="margin:0">Attendance — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Days Present</th><th>Late Arrivals</th><th>Total Hours</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td><span class="badge {{ 'badge-green' if r.days_present >= 20 else 'badge-amber' }}">{{ r.days_present or 0 }}</span></td>
+      <td>{{ r.late_count or 0 }}</td>
+      <td>{{ r.total_hours or 0 }}h</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Payroll Summary -->
+{% elif report == 'payroll' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span class="card-title" style="margin:0">Payroll — {{ month_name }} {{ year }}</span>
+    <a href="/reports/export/payroll-excel?year={{ year }}&month={{ month }}" class="btn btn-sm" style="background:#1D6F42;color:#fff;border-color:#1D6F42">⬇ Excel</a>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Gross</th><th>PF</th><th>ESI</th><th>TDS</th><th>Net Pay</th></tr></thead>
+    <tbody>
+    {% for emp, slip in rows %}
+    <tr>
+      <td style="font-weight:500">{{ emp.name }}</td>
+      <td>{{ emp.dept }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.gross) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.pf) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.esi) }}</td>
+      <td>₹{{ "{:,.0f}".format(slip.tds) }}</td>
+      <td style="font-weight:500;color:#185FA5">₹{{ "{:,.0f}".format(slip.net) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr style="font-weight:600;background:var(--bg3)">
+        <td colspan="2">Totals</td>
+        <td>₹{{ "{:,.0f}".format(total_gross) }}</td>
+        <td colspan="3"></td>
+        <td style="color:#185FA5">₹{{ "{:,.0f}".format(total_net) }}</td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<!-- Compliance / PF ESI -->
+{% elif report == 'compliance' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <span class="card-title" style="margin:0">PF & ESI Statutory Register — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Gross</th><th>Basic</th><th>PF (Emp)</th><th>PF (Er)</th><th>ESI (Emp)</th><th>ESI (Er)</th><th>PT</th><th>TDS</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td>₹{{ "{:,.0f}".format(r.gross) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.basic) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pf_emp) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pf_er) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.esi_emp) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.esi_er) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.pt) }}</td>
+      <td>₹{{ "{:,.0f}".format(r.tds) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Timesheet Summary -->
+{% elif report == 'timesheet_summary' %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <span class="card-title" style="margin:0">Timesheet Summary — {{ month_name }} {{ year }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Employee</th><th>Dept</th><th>Project</th><th>Hours</th><th>Entries</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td style="font-weight:500">{{ r.name }}</td>
+      <td>{{ r.dept }}</td>
+      <td>{{ r.proj_name }}</td>
+      <td><span class="badge badge-blue">{{ r.total_hours }}h</span></td>
+      <td>{{ r.entries }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text2)">No timesheet entries for this period.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<div class="card" style="text-align:center;padding:40px;color:var(--text2)">
+  Select a report type above.
+</div>
+{% endif %}
+{% endblock %}
+
+[FILE] templates\salary.html
+
+{% extends "base.html" %}
+{% set active = "salary" %}
+{% block content %}
+
+<!-- Selector -->
+<div class="card">
+  <form method="GET" action="/salary" class="flex">
+    <div style="flex:1">
+      <label>Employee</label>
+      <select name="emp_id" onchange="this.form.submit()">
+        <option value="">Select employee…</option>
+        {% for e in employees %}
+        <option value="{{ e.id }}" {{ 'selected' if selected and selected.id==e.id }}>{{ e.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Month</label>
+      <select name="month" onchange="this.form.submit()">
+        {% for i in range(1,13) %}
+        <option value="{{ i }}" {{ 'selected' if month==i }}>{{ months[i-1] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Year</label>
+      <select name="year" onchange="this.form.submit()">
+        {% for y in range(2023, 2027) %}
+        <option value="{{ y }}" {{ 'selected' if year==y }}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if selected %}<input type="hidden" name="emp_id" value="{{ selected.id }}">{% endif %}
+  </form>
+  <div style="margin-top:10px;text-align:right">
+    <a href="/salary/export/excel?year={{ year }}&month={{ month }}"
+       class="btn btn-sm" style="background:#1D6F42;color:#fff;border-color:#1D6F42">
+      ⬇ Export Payroll Register (.xlsx)
+    </a>
+  </div>
+</div>
+
+{% if selected and slip %}
+<div class="grid-2">
+  <!-- Earnings -->
+  <div class="card">
+    <div class="flex" style="margin-bottom:14px">
+      <div class="avatar" style="width:40px;height:40px;font-size:15px">{{ selected.name[:2] }}</div>
+      <div>
+        <div style="font-weight:600">{{ selected.name }}</div>
+        <div style="font-size:12px;color:#7A7974">{{ selected.role }} · {{ selected.dept }}</div>
+        <div style="font-size:11px;color:#7A7974">PAN: {{ selected.pan }} · Days worked: {{ slip.worked_days }}</div>
+      </div>
+    </div>
+    <div class="card-title">Earnings — {{ months[month-1] }} {{ year }}</div>
+    {% for label, val in [("Basic (50%)", slip.basic), ("HRA (20%)", slip.hra), ("Special Allowance", slip.special)] %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span><span>₹{{ "{:,.0f}".format(val) }}</span>
+    </div>
+    {% endfor %}
+    <div style="display:flex;justify-content:space-between;padding:10px;background:#F5F4F0;border-radius:6px;margin-top:8px;font-weight:600">
+      <span>Gross Salary</span><span>₹{{ "{:,.0f}".format(slip.gross) }}</span>
+    </div>
+  </div>
+
+  <!-- Deductions & Net -->
+  <div class="card">
+    <div class="card-title">Deductions</div>
+    {% for label, val, show in [
+        ("PF (12% of basic, cap ₹15k)", slip.pf, selected.pf),
+        ("ESI (0.75%)", slip.esi, selected.esi),
+        ("Professional Tax", slip.pt, True),
+        ("TDS (estimated)", slip.tds, True)
+    ] %}
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F0EFE9;font-size:13px">
+      <span style="color:#7A7974">{{ label }}</span>
+      <span style="color:{{ '#A32D2D' if show and val > 0 else '#7A7974' }}">
+        {{ ("− ₹" + "{:,.0f}".format(val)) if show and val > 0 else "N/A" }}
+      </span>
+    </div>
+    {% endfor %}
+    <div style="display:flex;justify-content:space-between;padding:10px;background:#FEF0F0;border-radius:6px;margin-top:8px;font-weight:600;color:#A32D2D">
+      <span>Total Deductions</span><span>− ₹{{ "{:,.0f}".format(slip.total_ded) }}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:12px;background:#E6F1FB;border:1px solid #B5D4F4;border-radius:6px;margin-top:8px;font-weight:700;font-size:16px;color:#185FA5">
+      <span>Net Pay</span><span>₹{{ "{:,.0f}".format(slip.net) }}</span>
+    </div>
+    <div style="margin-top:12px;text-align:right">
+      <a href="/salary/pdf?emp_id={{ selected.id }}&year={{ year }}&month={{ month }}"
+         class="btn btn-primary" target="_blank">⬇ Download PDF Payslip</a>
+    </div>
+  </div>
+</div>
+
+<!-- Email Dispatch -->
+<div class="card">
+  <div class="card-title">📧 Email Payslip</div>
+  <div class="grid-2">
+    <!-- Send form -->
+    <form method="POST" action="/salary/email/send">
+      <input type="hidden" name="emp_id" value="{{ selected.id }}">
+      <input type="hidden" name="year"   value="{{ year }}">
+      <input type="hidden" name="month"  value="{{ month }}">
+      <div class="form-field" style="margin-bottom:10px">
+        <label>Recipient Email *</label>
+        <input type="email" name="to_email" placeholder="employee@example.com" required>
+      </div>
+      <button class="btn btn-primary" type="submit">✉ Send Payslip PDF</button>
+    </form>
+    <!-- SMTP config (admin/hr only) -->
+    {% if current_user.role in ('admin','hr') %}
+    <form method="POST" action="/salary/email/config">
+      <input type="hidden" name="emp_id" value="{{ selected.id }}">
+      <input type="hidden" name="year"   value="{{ year }}">
+      <input type="hidden" name="month"  value="{{ month }}">
+      <div class="form-field" style="margin-bottom:8px">
+        <label>Sender Email (Outlook/O365)</label>
+        <input type="email" name="sender" placeholder="hr@yourcompany.com">
+      </div>
+      <div class="form-field" style="margin-bottom:10px">
+        <label>App Password</label>
+        <input type="password" name="password" placeholder="••••••••••••">
+      </div>
+      <button class="btn" type="submit">💾 Save SMTP Settings</button>
+      <div style="font-size:11px;color:#7A7974;margin-top:6px">
+        Use an <a href="https://support.microsoft.com/en-us/account-billing/using-app-passwords-with-apps-that-don-t-support-two-step-verification-5896ed9b-4263-e681-128a-a6f2979a7944" target="_blank" style="color:#185FA5">App Password</a> if MFA is enabled on the account.
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% elif selected %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">No salary data for selected period.</div>
+{% else %}
+<div class="card" style="text-align:center;color:#7A7974;padding:30px">Select an employee above to view salary slip.</div>
+{% endif %}
+{% endblock %}
+
+[FILE] templates\tasks.html
+
+{% extends "base.html" %}
+{% set active = "tasks" %}
+{% block content %}
+
+{% if is_manager %}
+<div class="card">
+  <div class="card-title">Add Task</div>
+  <form method="POST" action="/tasks/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Project *</label>
+        <select name="project_id" required>
+          <option value="">Select…</option>
+          {% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Task Title *</label>
+        <input name="title" placeholder="e.g. Prepare HAZOP report" required>
+      </div>
+      <div class="form-field">
+        <label>Assign To</label>
+        <select name="assigned_to">
+          <option value="">Unassigned</option>
+          {% for e in employees %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Due Date</label>
+        <input type="date" name="due_date">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Add Task</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<!-- Filter -->
+<div class="flex" style="margin-bottom:10px">
+  <form method="GET" action="/tasks" style="display:flex;gap:6px">
+    <select name="project" onchange="this.form.submit()">
+      <option value="">All Projects</option>
+      {% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if proj_filter==p.id }}>{{ p.name }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>Task</th><th>Project</th><th>Assigned To</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for t in tasks %}
+    <tr>
+      <td style="font-weight:500">{{ t.title }}</td>
+      <td style="color:var(--text2)">{{ t.proj_name }}</td>
+      <td>{{ t.assignee_name or '—' }}</td>
+      <td style="font-size:12px;color:var(--text2)">{{ t.due_date or '—' }}</td>
+      <td>
+        <span class="badge {{ 'badge-green' if t.status=='done' else 'badge-blue' if t.status=='in-progress' else 'badge-amber' }}">
+          {{ t.status }}
+        </span>
+      </td>
+      <td>
+        <div class="flex">
+          <form method="POST" action="/tasks/status/{{ t.id }}" style="display:flex;gap:4px">
+            <select name="status" style="font-size:12px;padding:3px 6px">
+              {% for s in ["open","in-progress","done"] %}
+              <option {{ 'selected' if t.status==s }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-primary" type="submit">✓</button>
+          </form>
+          {% if is_manager %}
+          <form method="POST" action="/tasks/delete/{{ t.id }}">
+            <button class="btn btn-sm btn-danger" type="submit">✕</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text2)">
+      {% if not is_manager %}No tasks assigned to you yet.{% else %}No tasks found.{% endif %}
+    </td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\timesheet.html
+
+{% extends "base.html" %}
+{% set active = "timesheet" %}
+{% block content %}
+
+<!-- Log Entry -->
+<div class="card">
+  <div class="card-title">Log Hours</div>
+  <form method="POST" action="/timesheet/add">
+    <input type="hidden" name="offset" value="{{ offset }}">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Employee *</label>
+        {% if is_manager %}
+        <select name="employee_id">
+          <option value="">Select…</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}">{{ e.name }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="hidden" name="employee_id" value="{{ my_emp_id }}">
+        <input type="text" value="{{ employees[0].name if employees }}" disabled>
+        {% endif %}
+      </div>
+      <div class="form-field">
+        <label>Project *</label>
+        <select name="project_id">
+          <option value="">Select…</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Task (optional)</label>
+        <select name="task_id">
+          <option value="">— General —</option>
+          {% for t in (tasks if tasks is defined else []) %}
+          <option value="{{ t.id }}">{{ t.title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Date *</label>
+        <input type="date" name="work_date" value="{{ week_start }}">
+      </div>
+      <div class="form-field">
+        <label>Hours *</label>
+        <input type="number" name="hours" step="0.5" min="0.5" max="24" placeholder="8">
+      </div>
+      <div class="form-field span-2">
+        <label>Notes</label>
+        <input name="notes" placeholder="What was done?">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Log Hours</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Week Navigation -->
+<div class="flex" style="margin-bottom:12px">
+  <a href="/timesheet?week={{ offset - 1 }}&emp={{ emp_filter }}" class="btn btn-sm">← Prev</a>
+  <strong style="font-size:13px">{{ week_start.strftime("%d %b") }} – {{ week_end.strftime("%d %b %Y") }}</strong>
+  <a href="/timesheet?week={{ offset + 1 }}&emp={{ emp_filter }}" class="btn btn-sm">Next →</a>
+  <div class="ml-auto">
+    {% if is_manager %}
+    <form method="GET" style="display:flex;gap:6px">
+      <input type="hidden" name="week" value="{{ offset }}">
+      <select name="emp" onchange="this.form.submit()">
+        <option value="">All Employees</option>
+        {% for e in employees %}
+        <option value="{{ e.id }}" {{ 'selected' if emp_filter==e.id|string }}>{{ e.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Weekly Grid -->
+<div class="card">
+  <div class="card-title">Hours This Week</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th>
+        {% for d in days %}<th style="text-align:center">{{ d }}</th>{% endfor %}
+        <th style="text-align:center">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in employees %}
+    {% set row = grid.get(e.id, {}) %}
+    {% set total = row.values()|sum %}
+    {% if total > 0 %}
+    <tr>
+      <td><div class="flex"><div class="avatar">{{ e.name[:2] }}</div>{{ e.name.split()[0] }}</div></td>
+      {% for i in range(7) %}
+      <td style="text-align:center">
+        {% if row.get(i) %}
+          <span style="background:#E6F1FB;color:#185FA5;padding:2px 7px;border-radius:4px;font-size:12px;font-weight:500">{{ row[i]|int if row[i] == row[i]|int else row[i] }}</span>
+        {% endif %}
+      </td>
+      {% endfor %}
+      <td style="text-align:center;font-weight:600;color:{{ '#1D9E75' if total>=40 else '#E24B4A' }}">{{ total|int if total==total|int else total }}h</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Entries log -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC"><span class="card-title" style="margin:0">All Entries This Week</span></div>
+  <table>
+    <thead><tr><th>Employee</th><th>Project</th><th>Date</th><th>Hours</th><th>Notes</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for t in entries %}
+    <tr>
+      <td>{{ t.emp_name }}</td>
+      <td>{{ t.proj_name }}</td>
+      <td>{{ t.work_date }}</td>
+      <td><span class="badge badge-blue">{{ t.hours }}h</span></td>
+      <td style="color:var(--text2)">{{ t.notes or '—' }}</td>
+      <td><span class="badge {{ 'badge-green' if t.status=='approved' else 'badge-blue' if t.status=='submitted' else 'badge-red' if t.status=='rejected' else 'badge-gray' }}">{{ t.status or 'draft' }}</span></td>
+      <td><div class="flex">
+        {% if t.status in ('draft',None,'') %}
+        <form method="POST" action="/timesheet/submit/{{ t.id }}"><button class="btn btn-sm btn-primary" type="submit">Submit</button></form>
+        <form method="POST" action="/timesheet/delete/{{ t.id }}"><button class="btn btn-sm btn-danger" type="submit">✕</button></form>
+        {% endif %}
+        {% if is_manager and t.status=='submitted' %}
+        <form method="POST" action="/timesheet/approve/{{ t.id }}" style="display:flex;gap:4px">
+          <button name="action" value="approve" class="btn btn-sm btn-primary">✓</button>
+          <button name="action" value="reject"  class="btn btn-sm btn-danger">✕</button>
+        </form>
+        {% endif %}
+      </div></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text2)">No entries this week.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+[FILE] templates\users.html
+
+{% extends "base.html" %}
+{% set active = "users" %}
+{% block content %}
+
+<!-- Add User -->
+<div class="card">
+  <div class="card-title">Add User</div>
+  <form method="POST" action="/users/add">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Username *</label>
+        <input name="username" placeholder="e.g. sneha.patil" required>
+      </div>
+      <div class="form-field">
+        <label>Full Name *</label>
+        <input name="full_name" placeholder="e.g. Sneha Patil" required>
+      </div>
+      <div class="form-field">
+        <label>Password *</label>
+        <input type="password" name="password" placeholder="Min 4 characters" required>
+      </div>
+      <div class="form-field">
+        <label>Role *</label>
+        <select name="role">
+          <option value="viewer">Viewer — read only</option>
+          <option value="hr">HR — add/edit employees &amp; timesheets</option>
+          <option value="admin">Admin — full access + user management</option>
+        </select>
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">Create User</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- User List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+    <span class="card-title" style="margin:0">All Users</span>
+  </div>
+  <table>
+    <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td><code>{{ u.username }}</code></td>
+      <td>{{ u.full_name }}</td>
+      <td>
+        {% if current_user.role == 'admin' and u.id != current_user.id %}
+        <form method="POST" action="/users/role/{{ u.id }}" style="display:flex;gap:4px;align-items:center">
+          <select name="role" style="padding:3px 6px;font-size:12px">
+            {% for r in ["admin","hr","viewer"] %}
+            <option value="{{ r }}" {{ 'selected' if u.role==r }}>{{ r }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-sm btn-primary" type="submit">Save</button>
+        </form>
+        {% else %}
+        <span class="badge {{ 'badge-red' if u.role=='admin' else 'badge-blue' if u.role=='hr' else 'badge-gray' }}">
+          {{ u.role }}
+        </span>
+        {% endif %}
+      </td>
+      <td>
+        <span class="badge {{ 'badge-green' if u.active else 'badge-amber' }}">
+          {{ 'Active' if u.active else 'Disabled' }}
+        </span>
+      </td>
+      <td>
+        <div class="flex">
+          <!-- Toggle active -->
+          <form method="POST" action="/users/toggle/{{ u.id }}" style="display:inline">
+            <button class="btn btn-sm" type="submit">
+              {{ 'Disable' if u.active else 'Enable' }}
+            </button>
+          </form>
+          <!-- Reset password -->
+          <form method="POST" action="/users/reset/{{ u.id }}" style="display:flex;gap:4px">
+            <input name="new_password" type="password" placeholder="New password" style="width:120px">
+            <button class="btn btn-sm" type="submit">Reset PW</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-title">Module Permissions (per role)</div>
+  <form method="POST" action="/users/permissions">
+    <table style="margin-bottom:12px">
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th style="text-align:center">HR</th>
+          <th style="text-align:center">User</th>
+          <th style="text-align:center">Admin</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mod in modules %}
+        <tr>
+          <td style="text-transform:capitalize">{{ mod }}</td>
+          {% for role in roles %}
+          <td style="text-align:center">
+            <input type="checkbox" name="{{ role }}_{{ mod }}"
+              {{ 'checked' if perm_map[role][mod] }}>
+          </td>
+          {% endfor %}
+          <td style="text-align:center">
+            <span style="color:#7A7974;font-size:12px">Always ✓</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button class="btn btn-primary btn-sm" type="submit">Save Permissions</button>
+  </form>
+</div>
+{% endblock %}

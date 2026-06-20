@@ -4,29 +4,45 @@
 
 <!-- Add User -->
 <div class="card">
-  <div class="card-title">Add User</div>
-  <form method="POST" action="/users/add">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="card-title" style="margin:0">Add User</div>
+      <div style="font-size:12px;color:#7A7974">
+        New users will be forced to change their temporary password after first login.
+      </div>
+    </div>
+
+    <a href="{{ url_for('auth.credentials') }}" class="btn">
+      View Credentials
+    </a>
+  </div>
+
+  <form method="POST" action="{{ url_for('auth.add_user') }}">
     <div class="form-grid cols-2">
       <div class="form-field">
         <label>Username *</label>
-        <input name="username" placeholder="e.g. sneha.patil" required>
+        <input name="username" placeholder="e.g. sneha12" required>
       </div>
+
       <div class="form-field">
         <label>Full Name *</label>
         <input name="full_name" placeholder="e.g. Sneha Patil" required>
       </div>
+
       <div class="form-field">
-        <label>Password *</label>
+        <label>Temporary Password *</label>
         <input type="password" name="password" placeholder="Min 4 characters" required>
       </div>
+
       <div class="form-field">
         <label>Role *</label>
         <select name="role">
-          <option value="viewer">Viewer — read only</option>
+          <option value="user">User — standard access</option>
           <option value="hr">HR — add/edit employees &amp; timesheets</option>
           <option value="admin">Admin — full access + user management</option>
         </select>
       </div>
+
       <div class="form-field span-2" style="display:flex;justify-content:flex-end">
         <button class="btn btn-primary" type="submit">Create User</button>
       </div>
@@ -36,61 +52,109 @@
 
 <!-- User List -->
 <div class="card" style="padding:0;overflow:hidden">
-  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC;display:flex;justify-content:space-between;align-items:center">
     <span class="card-title" style="margin:0">All Users</span>
+    <a href="{{ url_for('auth.credentials') }}" class="btn btn-sm">
+      Credentials
+    </a>
   </div>
+
   <table>
-    <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Full Name</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th>Password</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+
     <tbody>
-    {% for u in users %}
-    <tr>
-      <td><code>{{ u.username }}</code></td>
-      <td>{{ u.full_name }}</td>
-      <td>
-        {% if current_user.role == 'admin' and u.id != current_user.id %}
-        <form method="POST" action="/users/role/{{ u.id }}" style="display:flex;gap:4px;align-items:center">
-          <select name="role" style="padding:3px 6px;font-size:12px">
-            {% for r in ["admin","hr","viewer"] %}
-            <option value="{{ r }}" {{ 'selected' if u.role==r }}>{{ r }}</option>
-            {% endfor %}
-          </select>
-          <button class="btn btn-sm btn-primary" type="submit">Save</button>
-        </form>
-        {% else %}
-        <span class="badge {{ 'badge-red' if u.role=='admin' else 'badge-blue' if u.role=='hr' else 'badge-gray' }}">
-          {{ u.role }}
-        </span>
-        {% endif %}
-      </td>
-      <td>
-        <span class="badge {{ 'badge-green' if u.active else 'badge-amber' }}">
-          {{ 'Active' if u.active else 'Disabled' }}
-        </span>
-      </td>
-      <td>
-        <div class="flex">
-          <!-- Toggle active -->
-          <form method="POST" action="/users/toggle/{{ u.id }}" style="display:inline">
-            <button class="btn btn-sm" type="submit">
-              {{ 'Disable' if u.active else 'Enable' }}
-            </button>
+      {% for u in users %}
+      <tr>
+        <td><code>{{ u.username }}</code></td>
+
+        <td>{{ u.full_name }}</td>
+
+        <td>
+          {% if current_user.role == 'admin' and u.id != current_user.id %}
+          <form method="POST"
+                action="{{ url_for('auth.change_role', uid=u.id) }}"
+                style="display:flex;gap:4px;align-items:center">
+            <select name="role" style="padding:3px 6px;font-size:12px">
+              {% for r in ["admin", "hr", "user"] %}
+              <option value="{{ r }}" {{ 'selected' if u.role == r }}>
+                {{ r }}
+              </option>
+              {% endfor %}
+            </select>
+
+            <button class="btn btn-sm btn-primary" type="submit">Save</button>
           </form>
-          <!-- Reset password -->
-          <form method="POST" action="/users/reset/{{ u.id }}" style="display:flex;gap:4px">
-            <input name="new_password" type="password" placeholder="New password" style="width:120px">
-            <button class="btn btn-sm" type="submit">Reset PW</button>
-          </form>
-        </div>
-      </td>
-    </tr>
-    {% endfor %}
+          {% else %}
+          <span class="badge {{ 'badge-red' if u.role == 'admin' else 'badge-blue' if u.role == 'hr' else 'badge-gray' }}">
+            {{ u.role }}
+          </span>
+          {% endif %}
+        </td>
+
+        <td>
+          <span class="badge {{ 'badge-green' if u.active else 'badge-amber' }}">
+            {{ 'Active' if u.active else 'Disabled' }}
+          </span>
+        </td>
+
+        <td>
+          {% if u.must_change_password %}
+          <span class="badge badge-amber">Change Required</span>
+          {% else %}
+          <span class="badge badge-green">Changed</span>
+          {% endif %}
+        </td>
+
+        <td>
+          <div class="flex">
+            {% if u.id != current_user.id %}
+            <!-- Toggle active -->
+            <form method="POST"
+                  action="{{ url_for('auth.toggle_user', uid=u.id) }}"
+                  style="display:inline">
+              <button class="btn btn-sm" type="submit">
+                {{ 'Disable' if u.active else 'Enable' }}
+              </button>
+            </form>
+            {% endif %}
+
+            <!-- Reset password -->
+            <form method="POST"
+                  action="{{ url_for('auth.reset_password', uid=u.id) }}"
+                  style="display:inline"
+                  onsubmit="return confirm('Reset this user password to their username?')">
+              <button class="btn btn-sm" type="submit">
+                Reset PW
+              </button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="6" style="text-align:center;padding:20px;color:#7A7974">
+          No users found.
+        </td>
+      </tr>
+      {% endfor %}
     </tbody>
   </table>
 </div>
 
+<!-- Module Permissions -->
 <div class="card">
   <div class="card-title">Module Permissions (per role)</div>
-  <form method="POST" action="/users/permissions">
+
+  <form method="POST" action="{{ url_for('auth.save_permissions') }}">
     <table style="margin-bottom:12px">
       <thead>
         <tr>
@@ -100,16 +164,20 @@
           <th style="text-align:center">Admin</th>
         </tr>
       </thead>
+
       <tbody>
         {% for mod in modules %}
         <tr>
           <td style="text-transform:capitalize">{{ mod }}</td>
+
           {% for role in roles %}
           <td style="text-align:center">
-            <input type="checkbox" name="{{ role }}_{{ mod }}"
-              {{ 'checked' if perm_map[role][mod] }}>
+            <input type="checkbox"
+                   name="{{ role }}_{{ mod }}"
+                   {{ 'checked' if perm_map[role][mod] }}>
           </td>
           {% endfor %}
+
           <td style="text-align:center">
             <span style="color:#7A7974;font-size:12px">Always ✓</span>
           </td>
@@ -117,7 +185,11 @@
         {% endfor %}
       </tbody>
     </table>
-    <button class="btn btn-primary btn-sm" type="submit">Save Permissions</button>
+
+    <button class="btn btn-primary btn-sm" type="submit">
+      Save Permissions
+    </button>
   </form>
 </div>
+
 {% endblock %}

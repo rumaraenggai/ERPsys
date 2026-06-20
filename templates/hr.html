@@ -2,59 +2,10 @@
 {% set active = "hr" %}
 {% block content %}
 
-<!-- Add Employee Form -->
-<div class="card">
-  <div class="card-title">Add New Employee</div>
-  <form method="POST" action="/hr/add">
-    <div class="form-grid cols-2">
-      <div class="form-field span-2">
-        <label>Full Name *</label>
-        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Rahul Mehta">
-        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
-      </div>
-      <div class="form-field">
-        <label>Department *</label>
-        <select name="dept" class="{{ 'err' if errors and errors.dept }}">
-          <option value="">Select…</option>
-          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
-          <option {{ 'selected' if form and form.dept==d }}>{{ d }}</option>
-          {% endfor %}
-        </select>
-        {% if errors and errors.dept %}<div class="field-err">{{ errors.dept }}</div>{% endif %}
-      </div>
-      <div class="form-field">
-        <label>Role / Designation *</label>
-        <input name="role" value="{{ form.role if form else '' }}" class="{{ 'err' if errors and errors.role }}" placeholder="e.g. Process Engineer">
-        {% if errors and errors.role %}<div class="field-err">{{ errors.role }}</div>{% endif %}
-      </div>
-      <div class="form-field">
-        <label>Joining Date *</label>
-        <input type="date" name="join_date" value="{{ form.join_date if form else '' }}" class="{{ 'err' if errors and errors.join }}">
-        {% if errors and errors.join %}<div class="field-err">{{ errors.join }}</div>{% endif %}
-      </div>
-      <div class="form-field">
-        <label>Monthly Gross Salary (₹) *</label>
-        <input type="number" name="salary" value="{{ form.salary if form else '' }}" class="{{ 'err' if errors and errors.salary }}" placeholder="e.g. 55000" min="0">
-        {% if errors and errors.salary %}<div class="field-err">{{ errors.salary }}</div>{% endif %}
-      </div>
-      <div class="form-field span-2">
-        <label>PAN Number *</label>
-        <input name="pan" value="{{ form.pan if form else '' }}" class="{{ 'err' if errors and errors.pan }}" placeholder="ABCDE1234F" maxlength="10" style="text-transform:uppercase">
-        {% if errors and errors.pan %}<div class="field-err">{{ errors.pan }}</div>{% endif %}
-      </div>
-      <div class="form-field flex" style="align-items:center;gap:20px">
-        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
-          <input type="checkbox" name="pf" style="width:auto" checked> PF (12% of basic)
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
-          <input type="checkbox" name="esi" style="width:auto"> ESI (0.75%, ≤₹21k)
-        </label>
-      </div>
-      <div class="form-field" style="display:flex;align-items:flex-end">
-        <button class="btn btn-primary" type="submit">Add Employee</button>
-      </div>
-    </div>
-  </form>
+<!-- Add Employee -->
+<div class="card flex" style="justify-content:space-between;align-items:center">
+  <div class="card-title" style="margin:0">Employees</div>
+  <a href="/hr/add" class="btn btn-primary">＋ Add Employee</a>
 </div>
 
 <!-- Employee List -->
@@ -104,10 +55,14 @@
         <div class="flex">
           <a href="/salary?emp_id={{ e.id }}" class="btn btn-sm">Payslip</a>
           <a href="/hr/edit/{{ e.id }}" class="btn btn-sm">Edit</a>
+          <a href="/hr/{{ e.id }}/documents" class="btn btn-sm" style="background:#F0F4FB;color:#185FA5">📎 Docs</a>
           <form method="POST" action="/hr/delete/{{ e.id }}" onsubmit="return confirm('Deactivate {{ e.name }}? Their history will be preserved.')">
             <button class="btn btn-sm btn-danger" type="submit" {{ 'disabled' if e.status=='inactive' }}>
               {{ '✕ Deactivate' if e.status=='active' else 'Inactive' }}
             </button>
+          </form>
+          <form method="POST" action="/hr/permadelete/{{ e.id }}" onsubmit="return confirm('PERMANENTLY DELETE {{ e.name }}? This cannot be undone — all attendance, leave, timesheet, documents and login records for this employee will be erased.')">
+            <button class="btn btn-sm btn-danger" type="submit" style="background:#7A1F1F;border-color:#7A1F1F" title="Permanently delete — cannot be undone">🗑 Delete Permanently</button>
           </form>
         </div>
       </td>

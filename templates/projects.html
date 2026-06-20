@@ -69,16 +69,6 @@
           {% endfor %}
         </select>
       </div>
-      <div class="form-field span-2">
-        <label>Team Members</label>
-        <select name="members" multiple style="height:90px">
-          {% for e in employees %}
-          <option value="{{ e.id }}">{{ e.name }}</option>
-          {% endfor %}
-        </select>
-        <div style="font-size:11px;color:#7A7974;margin-top:3px">Hold Ctrl / Cmd to select multiple</div>
-      </div>
-
       <!-- Milestones -->
       <div class="form-field span-2">
         <div class="section-heading">Milestones (optional)</div>

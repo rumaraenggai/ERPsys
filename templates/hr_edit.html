@@ -1,16 +1,28 @@
 {% extends "base.html" %}
 {% set active = "hr" %}
 {% block content %}
-<div class="card" style="max-width:560px">
-  <div class="card-title">Edit Employee — {{ emp.name }}</div>
-  <form method="POST">
+<div class="flex" style="margin-bottom:14px">
+  <a href="/hr" class="btn btn-sm">← Back</a>
+  <h2 style="font-size:16px;font-weight:600">Edit Employee — {{ emp.name }}</h2>
+</div>
+
+<form method="POST">
+
+  <div class="card">
+    <div class="card-title">Employment Details</div>
     <div class="form-grid cols-2">
       <div class="form-field span-2"><label>Full Name</label><input name="name" value="{{ emp.name }}" required></div>
+      <div class="form-field"><label>File No.</label><input name="file_no" value="{{ emp.file_no or '' }}"></div>
+      <div class="form-field"><label>Employee Code</label><input name="employee_code" value="{{ emp.employee_code or '' }}" placeholder="e.g. EMP-018"></div>
       <div class="form-field"><label>Department</label>
         <select name="dept">{% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}<option {{ 'selected' if emp.dept==d }}>{{ d }}</option>{% endfor %}</select>
       </div>
-      <div class="form-field"><label>Role / Designation</label><input name="role" value="{{ emp.role }}"></div>
-      <div class="form-field"><label>Joining Date</label><input type="date" name="join_date" value="{{ emp.join_date }}"></div>
+      <div class="form-field"><label>Designation / Role</label><input name="role" value="{{ emp.role }}"></div>
+      <div class="form-field"><label>Date of Joining</label><input type="date" name="join_date" value="{{ emp.join_date }}"></div>
+      <div class="form-field"><label>Offer Letter</label><input name="offer_letter" value="{{ emp.offer_letter or '' }}"></div>
+      <div class="form-field"><label>Probation Period</label><input name="probation_period" value="{{ emp.probation_period or '' }}"></div>
+      <div class="form-field"><label>Confirmation Date</label><input type="date" name="confirmation_date" value="{{ emp.confirmation_date or '' }}"></div>
+      <div class="form-field"><label>Notice Period</label><input name="notice_period" value="{{ emp.notice_period or '' }}"></div>
       <div class="form-field"><label>Gross Salary (₹)</label><input type="number" name="salary" value="{{ emp.salary }}"></div>
       <div class="form-field"><label>Status</label>
         <select name="status"><option {{ 'selected' if emp.status=='active' }}>active</option><option {{ 'selected' if emp.status=='on-leave' }}>on-leave</option><option {{ 'selected' if emp.status=='inactive' }}>inactive</option></select>
@@ -19,11 +31,71 @@
         <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="pf" style="width:auto" {{ 'checked' if emp.pf }}> PF</label>
         <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" name="esi" style="width:auto" {{ 'checked' if emp.esi }}> ESI</label>
       </div>
-      <div class="form-field span-2" style="display:flex;gap:8px;justify-content:flex-end">
-        <a href="/hr" class="btn">Cancel</a>
-        <button class="btn btn-primary" type="submit">Save Changes</button>
-      </div>
     </div>
-  </form>
-</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Personal Details</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Date of Birth</label><input type="date" name="dob" value="{{ emp.dob or '' }}"></div>
+      <div class="form-field"><label>Age</label><input type="number" name="age" value="{{ emp.age or '' }}" min="0"></div>
+      <div class="form-field"><label>Blood Group</label><input name="blood_group" value="{{ emp.blood_group or '' }}"></div>
+      <div class="form-field"><label>Personal Contact Number</label><input name="personal_contact" value="{{ emp.personal_contact or '' }}"></div>
+      <div class="form-field"><label>Personal Email ID</label><input type="email" name="personal_email" value="{{ emp.personal_email or '' }}"></div>
+      <div class="form-field"><label>Official Email ID</label><input type="email" name="official_email" value="{{ emp.official_email or '' }}"></div>
+      <div class="form-field span-2"><label>Current Residential Address</label><input name="current_address" value="{{ emp.current_address or '' }}"></div>
+      <div class="form-field span-2"><label>Permanent Address</label><input name="permanent_address" value="{{ emp.permanent_address or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Education Documents</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>SSC</label><input name="edu_ssc" value="{{ emp.edu_ssc or '' }}"></div>
+      <div class="form-field"><label>HSC</label><input name="edu_hsc" value="{{ emp.edu_hsc or '' }}"></div>
+      <div class="form-field"><label>Under Graduate</label><input name="edu_ug" value="{{ emp.edu_ug or '' }}"></div>
+      <div class="form-field"><label>Post Graduation</label><input name="edu_pg" value="{{ emp.edu_pg or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Identity & Bank Details</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Aadhar Card</label><input name="aadhar_card" value="{{ emp.aadhar_card or '' }}"></div>
+      <div class="form-field"><label>Pan Card</label><input name="pan_card_note" value="{{ emp.pan_card_note or '' }}"></div>
+      <div class="form-field"><label>Insurance List</label><input name="insurance_list" value="{{ emp.insurance_list or '' }}"></div>
+      <div class="form-field"><label>Account Number</label><input name="account_number" value="{{ emp.account_number or '' }}"></div>
+      <div class="form-field span-2"><label>IFSC Code</label><input name="ifsc_code" value="{{ emp.ifsc_code or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Emergency Contact</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Name</label><input name="emergency_name" value="{{ emp.emergency_name or '' }}"></div>
+      <div class="form-field"><label>Relation</label><input name="emergency_relation" value="{{ emp.emergency_relation or '' }}"></div>
+      <div class="form-field"><label>Contact Number</label><input name="emergency_contact" value="{{ emp.emergency_contact or '' }}"></div>
+      <div class="form-field"><label>Location</label><input name="emergency_location" value="{{ emp.emergency_location or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Family</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Father — Name</label><input name="father_name" value="{{ emp.father_name or '' }}"></div>
+      <div class="form-field"><label>Father — Contact Number</label><input name="father_contact" value="{{ emp.father_contact or '' }}"></div>
+      <div class="form-field"><label>Mother — Name</label><input name="mother_name" value="{{ emp.mother_name or '' }}"></div>
+      <div class="form-field"><label>Mother — Contact Number</label><input name="mother_contact" value="{{ emp.mother_contact or '' }}"></div>
+      <div class="form-field"><label>Sister — Name</label><input name="sister_name" value="{{ emp.sister_name or '' }}"></div>
+      <div class="form-field"><label>Sister — Contact Number</label><input name="sister_contact" value="{{ emp.sister_contact or '' }}"></div>
+      <div class="form-field"><label>Brother — Name</label><input name="brother_name" value="{{ emp.brother_name or '' }}"></div>
+      <div class="form-field"><label>Brother — Contact Number</label><input name="brother_contact" value="{{ emp.brother_contact or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="flex" style="justify-content:flex-end;gap:8px;margin-bottom:30px">
+    <a href="/hr" class="btn">Cancel</a>
+    <button class="btn btn-primary" type="submit">Save Changes</button>
+  </div>
+</form>
 {% endblock %}

@@ -6,31 +6,33 @@ from datetime import date, timedelta
 timesheet_bp = Blueprint("timesheet", __name__)
 
 def week_range(offset=0):
-    today = date.today()
+    today  = date.today()
     monday = today - timedelta(days=today.weekday()) + timedelta(weeks=offset)
     return monday, monday + timedelta(days=6)
 
 @login_required
 @timesheet_bp.route("/")
 def index():
-    offset = int(request.args.get("week", 0))
+    offset     = int(request.args.get("week", 0))
     emp_filter = request.args.get("emp", "")
     start, end = week_range(offset)
 
-    conn      = get_conn()
+    conn       = get_conn()
     is_manager = current_user.role in ("admin", "hr")
 
-    # Non-managers only see themselves
     if is_manager:
-        employees = conn.execute("SELECT id, name FROM employees WHERE status='active'").fetchall()
-        projects  = conn.execute("SELECT id, name FROM projects WHERE status='active'").fetchall()
-        tasks     = []
+        employees = conn.execute(
+            "SELECT id, name FROM employees WHERE status='active'"
+        ).fetchall()
+        projects  = conn.execute(
+            "SELECT id, name FROM projects WHERE status='active'"
+        ).fetchall()
+        tasks = []
     else:
         employees = conn.execute(
             "SELECT id, name FROM employees WHERE id=? AND status='active'",
             (current_user.employee_id,)
         ).fetchall()
-        # Only show projects where employee has assigned tasks
         projects = conn.execute("""
             SELECT DISTINCT p.id, p.name FROM projects p
             JOIN tasks t ON t.project_id=p.id
@@ -41,16 +43,32 @@ def index():
             WHERE assigned_to=? AND status != 'done'
         """, (current_user.employee_id,)).fetchall()
 
-    sql = """
-        SELECT t.*, e.name as emp_name, p.name as proj_name
+    # Pre-load activities for all visible projects so the template can
+    # pass them to the JS without extra fetches on first render
+    project_ids  = [p["id"] for p in projects]
+    activities_map = {}   # { project_id: [{id, name}, ...] }
+    if project_ids:
+        placeholders = ",".join("?" * len(project_ids))
+        rows = conn.execute(
+            f"SELECT id, name, project_id FROM project_activities WHERE project_id IN ({placeholders}) ORDER BY name",
+            project_ids
+        ).fetchall()
+        for r in rows:
+            activities_map.setdefault(r["project_id"], []).append(
+                {"id": r["id"], "name": r["name"]}
+            )
+
+    sql    = """
+        SELECT t.*, e.name as emp_name, p.name as proj_name,
+               COALESCE(pa.name, '') as activity_name
         FROM timesheets t
         JOIN employees e ON e.id=t.employee_id
         JOIN projects  p ON p.id=t.project_id
+        LEFT JOIN project_activities pa ON pa.id=t.activity_id
         WHERE t.work_date BETWEEN ? AND ?
     """
     params = [str(start), str(end)]
 
-    # Lock non-managers to their own employee_id
     if not is_manager:
         sql += " AND t.employee_id=?"; params.append(current_user.employee_id)
     elif emp_filter:
@@ -60,7 +78,6 @@ def index():
     entries = conn.execute(sql, params).fetchall()
     conn.close()
 
-    # Build week grid: {emp_id: {day_offset: hours}}
     grid = {}
     for e in entries:
         eid = e["employee_id"]
@@ -76,42 +93,47 @@ def index():
         week_start=start, week_end=end,
         offset=offset, emp_filter=emp_filter,
         is_manager=is_manager,
-        my_emp_id=current_user.employee_id)
+        my_emp_id=current_user.employee_id,
+        activities_map=activities_map)
+
 
 @login_required
 @timesheet_bp.route("/add", methods=["POST"])
 def add():
-    f = request.form
-    emp_id  = f.get("employee_id")
-    proj_id = f.get("project_id")
-    wdate   = f.get("work_date")
-    hours   = f.get("hours")
-    notes   = f.get("notes","").strip()
-    offset  = f.get("offset", 0)
+    f           = request.form
+    emp_id      = f.get("employee_id")
+    proj_id     = f.get("project_id")
+    activity_id = f.get("activity_id") or None   # optional
+    wdate       = f.get("work_date")
+    hours       = f.get("hours")
+    notes       = f.get("notes", "").strip()
+    offset      = f.get("offset", 0)
 
     if not all([emp_id, proj_id, wdate, hours]):
-        flash("All fields are required.", "error")
+        flash("Employee, project, date and hours are required.", "error")
     else:
         conn = get_conn()
         conn.execute("""
-            INSERT INTO timesheets(employee_id,project_id,work_date,hours,notes)
-            VALUES(?,?,?,?,?)
-        """, (emp_id, proj_id, wdate, float(hours), notes))
+            INSERT INTO timesheets
+                (employee_id, project_id, activity_id, work_date, hours, notes)
+            VALUES(?,?,?,?,?,?)
+        """, (emp_id, proj_id, activity_id, wdate, float(hours), notes))
         conn.commit()
         conn.close()
         flash("Entry logged.", "success")
 
     return redirect(url_for("timesheet.index", week=offset))
 
+
 @login_required
 @timesheet_bp.route("/delete/<int:tid>", methods=["POST"])
 def delete(tid):
     conn = get_conn()
     conn.execute("DELETE FROM timesheets WHERE id=?", (tid,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     flash("Entry removed.", "info")
     return redirect(url_for("timesheet.index"))
+
 
 @timesheet_bp.route("/submit/<int:tid>", methods=["POST"])
 @login_required
@@ -122,15 +144,16 @@ def submit(tid):
     flash("Timesheet submitted for approval.", "success")
     return redirect(url_for("timesheet.index"))
 
+
 @timesheet_bp.route("/approve/<int:tid>", methods=["POST"])
 @login_required
 def approve(tid):
-    if current_user.role not in ("admin","hr"):
+    if current_user.role not in ("admin", "hr"):
         flash("Not authorised.", "error")
         return redirect(url_for("timesheet.index"))
-    action = request.form.get("action","approve")
-    status = "approved" if action=="approve" else "rejected"
-    conn = get_conn()
+    action = request.form.get("action", "approve")
+    status = "approved" if action == "approve" else "rejected"
+    conn   = get_conn()
     conn.execute("UPDATE timesheets SET status=? WHERE id=?", (status, tid))
     conn.commit(); conn.close()
     flash(f"Timesheet {status}.", "success")

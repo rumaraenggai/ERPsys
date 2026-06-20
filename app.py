@@ -21,6 +21,12 @@ from datetime import datetime
 app.jinja_env.filters['datetimeformat'] = lambda v, f: datetime.strptime(v, '%Y-%m-%d').strftime(f)
 app.secret_key = "erp-secret-key-change-in-prod"
 
+# Document uploads
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
+
 # Flask-Login
 login_manager = LoginManager(app)
 login_manager.login_view = "auth.login"

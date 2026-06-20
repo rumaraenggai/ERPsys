@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+
+<div class="flex" style="margin-bottom:14px">
+  <a href="/hr" class="btn btn-sm">← Back</a>
+  <h2 style="font-size:16px;font-weight:600">Add New Employee</h2>
+</div>
+
+<form method="POST" action="/hr/add">
+
+  <!-- Core / Employment -->
+  <div class="card">
+    <div class="card-title">Employment Details</div>
+    <div class="form-grid cols-2">
+      <div class="form-field span-2">
+        <label>Full Name *</label>
+        <input name="name" value="{{ form.name if form else '' }}" class="{{ 'err' if errors and errors.name }}" placeholder="e.g. Rahul Mehta">
+        {% if errors and errors.name %}<div class="field-err">{{ errors.name }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>File No.</label>
+        <input name="file_no" value="{{ form.file_no if form else '' }}">
+      </div>
+      <div class="form-field">
+        <label>Employee Code</label>
+        <input name="employee_code" value="{{ form.employee_code if form else '' }}" placeholder="e.g. EMP-018">
+      </div>
+      <div class="form-field">
+        <label>Department *</label>
+        <select name="dept" class="{{ 'err' if errors and errors.dept }}">
+          <option value="">Select…</option>
+          {% for d in ["Engineering","Projects","HR","Accounts","Admin","Operations"] %}
+          <option {{ 'selected' if form and form.dept==d }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.dept %}<div class="field-err">{{ errors.dept }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Designation / Role *</label>
+        <input name="role" value="{{ form.role if form else '' }}" class="{{ 'err' if errors and errors.role }}" placeholder="e.g. Process Engineer">
+        {% if errors and errors.role %}<div class="field-err">{{ errors.role }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Date of Joining *</label>
+        <input type="date" name="join_date" value="{{ form.join_date if form else '' }}" class="{{ 'err' if errors and errors.join }}">
+        {% if errors and errors.join %}<div class="field-err">{{ errors.join }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Offer Letter</label>
+        <input name="offer_letter" value="{{ form.offer_letter if form else '' }}" placeholder="e.g. Issued / Ref no.">
+      </div>
+      <div class="form-field">
+        <label>Probation Period</label>
+        <input name="probation_period" value="{{ form.probation_period if form else '' }}" placeholder="e.g. 6 months">
+      </div>
+      <div class="form-field">
+        <label>Confirmation Date</label>
+        <input type="date" name="confirmation_date" value="{{ form.confirmation_date if form else '' }}">
+      </div>
+      <div class="form-field">
+        <label>Notice Period</label>
+        <input name="notice_period" value="{{ form.notice_period if form else '' }}" placeholder="e.g. 30 days">
+      </div>
+      <div class="form-field">
+        <label>Monthly Gross Salary (₹) *</label>
+        <input type="number" name="salary" value="{{ form.salary if form else '' }}" class="{{ 'err' if errors and errors.salary }}" placeholder="e.g. 55000" min="0">
+        {% if errors and errors.salary %}<div class="field-err">{{ errors.salary }}</div>{% endif %}
+      </div>
+      <div class="form-field flex" style="align-items:center;gap:20px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="pf" style="width:auto" checked> PF (12% of basic)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" name="esi" style="width:auto"> ESI (0.75%, ≤₹21k)
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Personal -->
+  <div class="card">
+    <div class="card-title">Personal Details</div>
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Date of Birth</label>
+        <input type="date" name="dob" value="{{ form.dob if form else '' }}">
+      </div>
+      <div class="form-field">
+        <label>Age</label>
+        <input type="number" name="age" value="{{ form.age if form else '' }}" min="0">
+      </div>
+      <div class="form-field">
+        <label>Blood Group</label>
+        <input name="blood_group" value="{{ form.blood_group if form else '' }}" placeholder="e.g. O+">
+      </div>
+      <div class="form-field span-2">
+        <label>PAN Number *</label>
+        <input name="pan" value="{{ form.pan if form else '' }}" class="{{ 'err' if errors and errors.pan }}" placeholder="ABCDE1234F" maxlength="10" style="text-transform:uppercase">
+        {% if errors and errors.pan %}<div class="field-err">{{ errors.pan }}</div>{% endif %}
+      </div>
+      <div class="form-field">
+        <label>Personal Contact Number</label>
+        <input name="personal_contact" value="{{ form.personal_contact if form else '' }}">
+      </div>
+      <div class="form-field">
+        <label>Personal Email ID</label>
+        <input type="email" name="personal_email" value="{{ form.personal_email if form else '' }}">
+      </div>
+      <div class="form-field span-2">
+        <label>Official Email ID</label>
+        <input type="email" name="official_email" value="{{ form.official_email if form else '' }}">
+      </div>
+      <div class="form-field span-2">
+        <label>Current Residential Address</label>
+        <input name="current_address" value="{{ form.current_address if form else '' }}">
+      </div>
+      <div class="form-field span-2">
+        <label>Permanent Address</label>
+        <input name="permanent_address" value="{{ form.permanent_address if form else '' }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Education -->
+  <div class="card">
+    <div class="card-title">Education Documents</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>SSC</label><input name="edu_ssc" value="{{ form.edu_ssc if form else '' }}"></div>
+      <div class="form-field"><label>HSC</label><input name="edu_hsc" value="{{ form.edu_hsc if form else '' }}"></div>
+      <div class="form-field"><label>Under Graduate</label><input name="edu_ug" value="{{ form.edu_ug if form else '' }}"></div>
+      <div class="form-field"><label>Post Graduation</label><input name="edu_pg" value="{{ form.edu_pg if form else '' }}"></div>
+    </div>
+  </div>
+
+  <!-- IDs & Bank -->
+  <div class="card">
+    <div class="card-title">Identity & Bank Details</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Aadhar Card</label><input name="aadhar_card" value="{{ form.aadhar_card if form else '' }}"></div>
+      <div class="form-field"><label>Pan Card</label><input name="pan_card_note" value="{{ form.pan_card_note if form else '' }}"></div>
+      <div class="form-field"><label>Insurance List</label><input name="insurance_list" value="{{ form.insurance_list if form else '' }}"></div>
+      <div class="form-field"><label>Account Number</label><input name="account_number" value="{{ form.account_number if form else '' }}"></div>
+      <div class="form-field span-2"><label>IFSC Code</label><input name="ifsc_code" value="{{ form.ifsc_code if form else '' }}"></div>
+    </div>
+  </div>
+
+  <!-- Emergency Contact -->
+  <div class="card">
+    <div class="card-title">Emergency Contact</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Name</label><input name="emergency_name" value="{{ form.emergency_name if form else '' }}"></div>
+      <div class="form-field"><label>Relation</label><input name="emergency_relation" value="{{ form.emergency_relation if form else '' }}"></div>
+      <div class="form-field"><label>Contact Number</label><input name="emergency_contact" value="{{ form.emergency_contact if form else '' }}"></div>
+      <div class="form-field"><label>Location</label><input name="emergency_location" value="{{ form.emergency_location if form else '' }}"></div>
+    </div>
+  </div>
+
+  <!-- Family -->
+  <div class="card">
+    <div class="card-title">Family</div>
+    <div class="form-grid cols-2">
+      <div class="form-field"><label>Father — Name</label><input name="father_name" value="{{ form.father_name if form else '' }}"></div>
+      <div class="form-field"><label>Father — Contact Number</label><input name="father_contact" value="{{ form.father_contact if form else '' }}"></div>
+      <div class="form-field"><label>Mother — Name</label><input name="mother_name" value="{{ form.mother_name if form else '' }}"></div>
+      <div class="form-field"><label>Mother — Contact Number</label><input name="mother_contact" value="{{ form.mother_contact if form else '' }}"></div>
+      <div class="form-field"><label>Sister — Name</label><input name="sister_name" value="{{ form.sister_name if form else '' }}"></div>
+      <div class="form-field"><label>Sister — Contact Number</label><input name="sister_contact" value="{{ form.sister_contact if form else '' }}"></div>
+      <div class="form-field"><label>Brother — Name</label><input name="brother_name" value="{{ form.brother_name if form else '' }}"></div>
+      <div class="form-field"><label>Brother — Contact Number</label><input name="brother_contact" value="{{ form.brother_contact if form else '' }}"></div>
+    </div>
+  </div>
+
+  <div class="flex" style="justify-content:flex-end;gap:8px;margin-bottom:30px">
+    <a href="/hr" class="btn">Cancel</a>
+    <button class="btn btn-primary" type="submit">Add Employee</button>
+  </div>
+</form>
+{% endblock %}

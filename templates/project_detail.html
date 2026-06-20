@@ -32,13 +32,28 @@
     {% endif %}
 
     <div class="card-title" style="margin-top:14px">Team</div>
-    <div class="flex" style="flex-wrap:wrap">
+    <div class="flex" style="flex-wrap:wrap;gap:6px">
     {% for m in members %}
-      <div class="flex" style="background:#F5F4F0;padding:4px 10px;border-radius:20px;font-size:12px">
+      <div class="flex" style="background:#F5F4F0;padding:4px 6px 4px 10px;border-radius:20px;font-size:12px;gap:6px">
         <div class="avatar" style="width:22px;height:22px;font-size:10px">{{ m.name[:2] }}</div>{{ m.name }}
+        <form method="POST" action="/projects/detail/{{ project.id }}/members/remove" style="display:inline" onsubmit="return confirm('Remove {{ m.name }} from this project?')">
+          <input type="hidden" name="employee_id" value="{{ m.id }}">
+          <button type="submit" style="background:none;border:none;cursor:pointer;font-size:13px;color:#A32D2D;padding:0;line-height:1" title="Remove from project">✕</button>
+        </form>
       </div>
     {% else %}<span style="color:#7A7974;font-size:13px">No members assigned.</span>{% endfor %}
     </div>
+    {% if non_members %}
+    <form method="POST" action="/projects/detail/{{ project.id }}/members/add" style="display:flex;gap:6px;margin-top:10px">
+      <select name="employee_id" style="flex:1">
+        <option value="">Add member…</option>
+        {% for e in non_members %}
+        <option value="{{ e.id }}">{{ e.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-sm btn-primary" type="submit">＋ Add</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 

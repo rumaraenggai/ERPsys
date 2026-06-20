@@ -8,23 +8,26 @@
     <div class="card-title">ESSL Device Sync</div>
     <div style="font-size:13px;margin-bottom:12px">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;display:inline-block"></span>
-        Device connected
+        <span style="width:8px;height:8px;border-radius:50%;background:{{ '#1D9E75' if connected else '#E24B4A' }};display:inline-block"></span>
+        {{ 'Device connected' if connected else 'Device offline' }}
       </div>
       <div style="color:#7A7974;font-size:12px">Uses <code>pyzk</code> library over TCP port 4370.</div>
     </div>
-    <form method="POST" action="/biometric/sync">
+    <form method="POST" action="/biometric/sync" id="syncForm">
       <div class="form-grid cols-2" style="margin-bottom:10px">
         <div class="form-field">
           <label>Device IP</label>
-          <input name="ip" value="192.168.1.100" placeholder="192.168.1.x">
+          <input name="ip" id="device_ip" value="{{ device_ip }}" placeholder="192.168.1.x">
         </div>
         <div class="form-field">
           <label>Port</label>
-          <input name="port" value="4370" type="number">
+          <input name="port" id="device_port" value="{{ device_port }}" type="number">
         </div>
       </div>
-      <button class="btn btn-primary" type="submit">🔄 Pull from Device</button>
+      <div class="flex" style="gap:8px">
+        <button class="btn btn-primary" type="submit">🔄 Pull from Device</button>
+        <button class="btn" type="submit" formaction="/biometric/pull-users">👥 Pull Employee List</button>
+      </div>
     </form>
   </div>
 

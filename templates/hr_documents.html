@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set active = "hr" %}
+{% block content %}
+
+<div class="flex" style="margin-bottom:14px">
+  <a href="/hr" class="btn btn-sm">← Back</a>
+  <h2 style="font-size:16px;font-weight:600">{{ emp.name }} — Documents</h2>
+</div>
+
+<!-- Upload Form -->
+<div class="card">
+  <div class="card-title">Upload Document</div>
+  <form method="POST" action="/hr/{{ emp.id }}/documents/upload" enctype="multipart/form-data">
+    <div class="form-grid cols-2">
+      <div class="form-field">
+        <label>Document Type *</label>
+        <select name="doc_type">
+          {% for d in doc_types %}
+          <option>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label>File *</label>
+        <input type="file" name="file" required>
+      </div>
+      <div class="form-field span-2">
+        <label>Notes</label>
+        <input name="notes" placeholder="Optional notes about this document">
+      </div>
+      <div class="form-field span-2" style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" type="submit">⬆ Upload</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Document List -->
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:12px 16px;border-bottom:1px solid #E5E3DC">
+    <span class="card-title" style="margin:0">Uploaded Documents ({{ docs|length }})</span>
+  </div>
+  <table>
+    <thead><tr><th>Type</th><th>File</th><th>Notes</th><th>Uploaded On</th><th>By</th><th></th></tr></thead>
+    <tbody>
+    {% for d in docs %}
+    <tr>
+      <td><span class="badge badge-blue">{{ d.doc_type }}</span></td>
+      <td>{{ d.filename }}</td>
+      <td style="color:#7A7974">{{ d.notes or '—' }}</td>
+      <td>{{ d.uploaded_on }}</td>
+      <td style="color:#7A7974">{{ d.uploaded_by or '—' }}</td>
+      <td>
+        <div class="flex">
+          <a href="/hr/{{ emp.id }}/documents/download/{{ d.id }}" class="btn btn-sm">⬇ Download</a>
+          <form method="POST" action="/hr/{{ emp.id }}/documents/delete/{{ d.id }}" onsubmit="return confirm('Delete &quot;{{ d.filename }}&quot;? This cannot be undone.')">
+            <button class="btn btn-sm btn-danger" type="submit">✕</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;padding:20px;color:#7A7974">No documents uploaded yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,3 +1,5 @@
+
+
 import sqlite3
 import os
 import bcrypt
@@ -108,18 +110,28 @@ def init_db():
         done       INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS project_activities (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        UNIQUE(project_id, name),
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+    );
+
     CREATE TABLE IF NOT EXISTS timesheets (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER,
         project_id  TEXT,
         task_id     INTEGER,
+        activity_id INTEGER,
         work_date   TEXT,
         hours       REAL,
         notes       TEXT,
         status      TEXT DEFAULT 'draft',
         FOREIGN KEY(employee_id) REFERENCES employees(id),
         FOREIGN KEY(project_id)  REFERENCES projects(id),
-        FOREIGN KEY(task_id)     REFERENCES tasks(id)
+        FOREIGN KEY(task_id)     REFERENCES tasks(id),
+        FOREIGN KEY(activity_id) REFERENCES project_activities(id)
     );
 
     CREATE TABLE IF NOT EXISTS attendance (
@@ -176,9 +188,16 @@ def init_db():
         port     INTEGER DEFAULT 587
     );
 
-    CREATE TABLE IF NOT EXISTS config (
-        key   TEXT PRIMARY KEY,
-        value TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS employee_documents (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id  INTEGER NOT NULL,
+        doc_type     TEXT NOT NULL,
+        filename     TEXT NOT NULL,
+        stored_name  TEXT NOT NULL,
+        uploaded_on  TEXT DEFAULT (date('now')),
+        uploaded_by  TEXT,
+        notes        TEXT,
+        FOREIGN KEY(employee_id) REFERENCES employees(id)
     );
     """)
     conn.commit()
@@ -254,9 +273,89 @@ def init_db():
                 """, (emp["id"], lt["id"], year, lt["days"]))
         conn.commit()
 
+    # Ensure employee_documents table exists on older DBs
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS employee_documents (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id  INTEGER NOT NULL,
+            doc_type     TEXT NOT NULL,
+            filename     TEXT NOT NULL,
+            stored_name  TEXT NOT NULL,
+            uploaded_on  TEXT DEFAULT (date('now')),
+            uploaded_by  TEXT,
+            notes        TEXT,
+            FOREIGN KEY(employee_id) REFERENCES employees(id)
+        )
+    """)
+    conn.commit()
+
+    # Live migrations for existing databases
+    existing_cols = [r[1] for r in c.execute("PRAGMA table_info(timesheets)").fetchall()]
+    if "activity_id" not in existing_cols:
+        c.execute("ALTER TABLE timesheets ADD COLUMN activity_id INTEGER REFERENCES project_activities(id)")
+        conn.commit()
+
+    emp_cols = [r[1] for r in c.execute("PRAGMA table_info(employees)").fetchall()]
+    if "essl_user_id" not in emp_cols:
+        c.execute("ALTER TABLE employees ADD COLUMN essl_user_id TEXT")
+        conn.commit()
+
+    # Extended employee profile fields — all optional, filled in later
+    extended_fields = [
+        ("file_no",            "TEXT"),
+        ("employee_code",      "TEXT"),
+        ("dob",                "TEXT"),
+        ("age",                "INTEGER"),
+        ("blood_group",        "TEXT"),
+        ("probation_period",   "TEXT"),
+        ("confirmation_date",  "TEXT"),
+        ("notice_period",      "TEXT"),
+        ("personal_contact",   "TEXT"),
+        ("personal_email",     "TEXT"),
+        ("official_email",     "TEXT"),
+        ("current_address",   "TEXT"),
+        ("permanent_address", "TEXT"),
+        ("offer_letter",       "TEXT"),
+        ("aadhar_card",        "TEXT"),
+        ("pan_card_note",      "TEXT"),
+        ("insurance_list",     "TEXT"),
+        ("account_number",     "TEXT"),
+        ("ifsc_code",          "TEXT"),
+        ("edu_ssc",            "TEXT"),
+        ("edu_hsc",            "TEXT"),
+        ("edu_ug",             "TEXT"),
+        ("edu_pg",             "TEXT"),
+        ("emergency_name",     "TEXT"),
+        ("emergency_relation", "TEXT"),
+        ("emergency_contact",  "TEXT"),
+        ("emergency_location", "TEXT"),
+        ("father_name",        "TEXT"),
+        ("father_contact",     "TEXT"),
+        ("mother_name",        "TEXT"),
+        ("mother_contact",     "TEXT"),
+        ("sister_name",        "TEXT"),
+        ("sister_contact",     "TEXT"),
+        ("brother_name",       "TEXT"),
+        ("brother_contact",    "TEXT"),
+    ]
+    for col_name, col_type in extended_fields:
+        if col_name not in emp_cols:
+            c.execute(f"ALTER TABLE employees ADD COLUMN {col_name} {col_type}")
+            conn.commit()
+
     # Seed default ESSL device address if not already set
+    # Ensure config table exists
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    conn.commit()
+
     if c.execute("SELECT COUNT(*) FROM config WHERE key='essl_device'").fetchone()[0] == 0:
         c.execute("INSERT INTO config(key, value) VALUES('essl_device', '192.168.1.7:4320')")
         conn.commit()
 
     conn.close()
+

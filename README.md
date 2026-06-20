@@ -47,7 +47,7 @@ Double-click to launch — no Python needed on target machine.
 
 ## 4. ESSL Biometric Sync
 - Device must be on the same LAN as the PC running MiniERP
-- Default IP: 192.168.1.100, Port: 4370
+- Default IP: 192.168.1.101, Port: 4370
 - Go to Biometric → enter device IP → click "Pull from Device"
 - Requires: `pip install pyzk`
 - Supported devices: eSSL MB20, iClock series, and most ZKTeco-compatible devices
